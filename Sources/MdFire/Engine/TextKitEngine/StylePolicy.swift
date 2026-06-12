@@ -14,6 +14,9 @@ public protocol StylePolicy {
     var revealsAtCaret: Bool { get }
     func contentAttributes(for node: SyntaxNode, theme: Theme) -> [NSAttributedString.Key: Any]
     func markerAttributes(for node: SyntaxNode, theme: Theme) -> [NSAttributedString.Key: Any]
+    /// How a marker looks when the caret is inside its element (WYSIWYG reveal). Restores full size +
+    /// dim color so hidden markers become editable, then collapse again when the caret leaves.
+    func revealedMarkerAttributes(for node: SyntaxNode, theme: Theme) -> [NSAttributedString.Key: Any]
 }
 
 public extension StylePolicy {
@@ -42,6 +45,11 @@ public extension StylePolicy {
         case .paragraph, .listItem, .taskItem, .text, .thematicBreak:
             return [:]
         }
+    }
+
+    /// Default reveal: full-size, dim markers (same look as syntax-visible mode).
+    func revealedMarkerAttributes(for node: SyntaxNode, theme: Theme) -> [NSAttributedString.Key: Any] {
+        [.font: theme.bodyFont, .foregroundColor: theme.palette.marker]
     }
 }
 

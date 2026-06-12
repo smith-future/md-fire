@@ -6,7 +6,10 @@ import MarkdownCore
 /// models — it just asks the policy for content + marker attributes and writes them. The Coordinator
 /// parses once and shares the nodes with both the Styler and the MarkupHider.
 struct Styler {
-    func apply(to textView: STTextView, nodes: [SyntaxNode], policy: StylePolicy, theme: Theme) {
+    /// `revealLocation` is the caret offset (or nil). In WYSIWYG mode, the element containing the
+    /// caret shows its markers (reveal) instead of collapsing them.
+    func apply(to textView: STTextView, nodes: [SyntaxNode], policy: StylePolicy, theme: Theme,
+               revealLocation: Int? = nil) {
         let nsLen = (textView.text as NSString?)?.length ?? 0
         guard nsLen > 0 else { return }
         let full = NSRange(location: 0, length: nsLen)
@@ -25,11 +28,21 @@ struct Styler {
                 textView.addAttributes(content, range: node.contentRange)
             }
             guard !node.markerRanges.isEmpty else { continue }
-            let marker = policy.markerAttributes(for: node, theme: theme)
+            let revealed = policy.revealsAtCaret
+                && revealLocation.map { caretInside($0, node.nodeRange) } == true
+            let marker = revealed
+                ? policy.revealedMarkerAttributes(for: node, theme: theme)
+                : policy.markerAttributes(for: node, theme: theme)
             for range in node.markerRanges where isValid(range, nsLen) {
                 textView.addAttributes(marker, range: range)
             }
         }
+    }
+
+    /// Caret counts as "inside" when it sits anywhere within the element, including either edge,
+    /// so markers reveal as the caret arrives at and traverses the construct.
+    private func caretInside(_ location: Int, _ range: NSRange) -> Bool {
+        location >= range.location && location <= range.location + range.length
     }
 
     private func isValid(_ r: NSRange, _ length: Int) -> Bool {

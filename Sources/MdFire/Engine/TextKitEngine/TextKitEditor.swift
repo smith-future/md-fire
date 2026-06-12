@@ -34,10 +34,8 @@ struct TextKitEditor: NSViewRepresentable {
         // textContentStorage.delegate) breaks STTextView's layout/selection, which assumes display
         // length == storage length. WYSIWYG hiding is therefore attribute-based (near-zero-width,
         // transparent markers) in LiveWYSIWYGPolicy — storage length stays intact.
-        let nodes = coordinator.parser.parse(text)
-
         textView.text = text
-        coordinator.applyStyle(nodes: nodes, mode: mode, theme: theme)
+        coordinator.reparseAndStyle()
         return scrollView
     }
 
@@ -53,8 +51,10 @@ struct TextKitEditor: NSViewRepresentable {
             coordinator.isProgrammatic = true
             textView.text = text
             coordinator.isProgrammatic = false
+            coordinator.reparseAndStyle()
+        } else {
+            coordinator.restyle()   // mode/theme may have changed
         }
-        coordinator.restyle()
     }
 
     final class Coordinator: NSObject, STTextViewDelegate {
@@ -65,28 +65,37 @@ struct TextKitEditor: NSViewRepresentable {
         var onChange: ((String) -> Void)?
         let parser = TreeSitterParser()
         private let styler = Styler()
+        private var nodes: [SyntaxNode] = []
 
         init(mode: RenderMode, theme: Theme) {
             self.mode = mode
             self.theme = theme
         }
 
-        func applyStyle(nodes: [SyntaxNode], mode: RenderMode, theme: Theme) {
-            guard let textView else { return }
-            let policy: StylePolicy = mode == .liveWYSIWYG ? LiveWYSIWYGPolicy() : SyntaxVisiblePolicy()
-            styler.apply(to: textView, nodes: nodes, policy: policy, theme: theme)
+        private var policy: StylePolicy {
+            mode == .liveWYSIWYG ? LiveWYSIWYGPolicy() : SyntaxVisiblePolicy()
         }
 
-        /// Re-parse and re-style on edit.
+        /// Re-parse (text changed) then style with caret awareness.
+        func reparseAndStyle() {
+            nodes = parser.parse(textView?.text ?? "")
+            restyle()
+        }
+
+        /// Re-apply styling using the cached parse, revealing markers under the caret.
         func restyle() {
             guard let textView else { return }
-            let nodes = parser.parse(textView.text ?? "")
-            applyStyle(nodes: nodes, mode: mode, theme: theme)
+            styler.apply(to: textView, nodes: nodes, policy: policy, theme: theme,
+                         revealLocation: textView.textSelection.location)
         }
 
         func textViewDidChangeText(_ notification: Notification) {
-            restyle()
+            reparseAndStyle()
             if !isProgrammatic, let text = textView?.text { onChange?(text) }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            restyle()   // reveal/collapse markers as the caret moves
         }
     }
 }
