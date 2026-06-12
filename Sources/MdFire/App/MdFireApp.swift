@@ -2,14 +2,14 @@ import SwiftUI
 import MarkdownCore
 
 /// md-fire — a native macOS markdown editor fusing Typora's live WYSIWYG with
-/// iA Writer's focus + typography. Phase 0: a runnable empty shell.
+/// iA Writer's focus + typography. Phase 2: the dual-mode TextKit 2 engine.
 ///
 /// See docs/PRODUCT.md, docs/ARCHITECTURE.md, docs/UI-DESIGN.md, docs/BUILD-PLAN.md.
 @main
 struct MdFireApp: App {
     var body: some Scene {
         WindowGroup {
-            ScaffoldView()
+            DevHarnessView()
                 .frame(minWidth: 640, minHeight: 480)
         }
         .windowStyle(.hiddenTitleBar)               // UI-DESIGN §4.1: chromeless
@@ -17,42 +17,59 @@ struct MdFireApp: App {
     }
 }
 
-/// Temporary Phase-1 placeholder. Replaced by RootView (NavigationSplitView) in Phase 3.
-/// Parses a sample through MarkdownCore to prove the engine is wired into the app.
-private struct ScaffoldView: View {
-    private static let sample = "# md-fire\n\n**Typora** × _iA Writer_. Live `markdown`.\n"
-    private let nodeCount = TreeSitterParser().parse(sample).count
+/// Phase-2 development harness: the SAME source rendered side by side in both editing models, proving
+/// they are one pipeline with two policies. Replaced by RootView (sidebar + status bar, single view
+/// with a mode toggle) in Phase 3.
+private struct DevHarnessView: View {
+    @State private var text = Self.sample
 
     var body: some View {
-        ZStack {
-            BrandColor.lightCanvas.ignoresSafeArea() // iA confirmed #F5F6F6, never pure white
-            VStack(spacing: 6) {
-                Text("md-fire")
-                    .font(.system(size: 30, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(BrandColor.lightBody)   // iA confirmed #424242
-                Text("Phase 1 — MarkdownCore parsed \(nodeCount) nodes")
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(BrandColor.marker)      // ~#B0B0AE
-            }
+        HStack(spacing: 0) {
+            pane("Source — iA syntax-visible", mode: .syntaxVisible)
+            Divider()
+            pane("Live — Typora WYSIWYG", mode: .liveWYSIWYG)
         }
     }
-}
 
-/// Minimal color helper for Phase 0. Superseded by Theme/ThemePalette.swift in Phase 3.
-private enum BrandColor {
-    static let lightCanvas = Color(hex: 0xF5F6F6)
-    static let lightBody   = Color(hex: 0x424242)
-    static let marker      = Color(hex: 0xB0B0AE)
-}
+    private func pane(_ title: String, mode: RenderMode) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.quaternary)
 
-private extension Color {
-    init(hex: UInt32) {
-        self.init(
-            .sRGB,
-            red:   Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue:  Double(hex & 0xFF) / 255,
-            opacity: 1
-        )
+            TextKitEditor(text: text, mode: mode)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
+
+    static let sample = """
+    # md-fire
+
+    A native macOS editor: **Typora** live preview × _iA Writer_ focus.
+
+    ## Why it exists
+
+    One Markdown source, two modes. Switch with the toggle below — the text never changes,
+    only how `markers` are shown. Inline `code`, **strong**, _emphasis_, and ~~strikethrough~~.
+
+    ### Checklist
+
+    - [x] tree-sitter parser
+    - [x] range mapping
+    - [ ] live marker hiding
+
+    > Presentation never touches the file. What you save is plain Markdown.
+
+    ```swift
+    let engine = TextKitEditor(text: source, mode: .liveWYSIWYG)
+    ```
+
+    See [the design docs](docs/PRODUCT.md) for the full plan.
+    """
 }

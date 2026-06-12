@@ -28,6 +28,10 @@ packages:
   # Brings SwiftTreeSitter + tree-sitter-markdown + swift-markdown transitively.
   MarkdownCore:
     path: Packages/MarkdownCore
+  # Phase 2: TextKit 2 NSTextView base for the live editor engine.
+  STTextView:
+    url: https://github.com/krzyzanowskim/STTextView
+    from: "2.0.0"
 
 targets:
   md-fire:
@@ -57,3 +61,5 @@ targets:
     dependencies:
       - package: MarkdownCore
         product: MarkdownCore
+      - package: STTextView
+        product: STTextView
