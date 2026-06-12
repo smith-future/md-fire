@@ -37,6 +37,13 @@ public struct Theme {
 
     public var bodyFont: NSFont { font(size: baseSize) }
 
+    /// Width of the fixed reading column for a given character count (UI-DESIGN §2.4: 64/72/80).
+    /// Computed from the monospace advance so the column holds exactly that many characters.
+    public func columnWidth(chars: Int) -> CGFloat {
+        let advance = ("0" as NSString).size(withAttributes: [.font: bodyFont]).width
+        return advance * CGFloat(chars) + 2 * 28   // + lineFragmentPadding on both sides
+    }
+
     public func paragraphStyle() -> NSParagraphStyle {
         let p = NSMutableParagraphStyle()
         p.lineHeightMultiple = lineHeightMultiple
