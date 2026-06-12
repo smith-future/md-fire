@@ -1,0 +1,50 @@
+name: md-fire
+
+# project.yml is the source of truth for the Xcode project.
+# Regenerate the .xcodeproj with:  xcodegen generate   (or `make project`)
+# Dependencies are added incrementally per BUILD-PLAN phase, each verified to resolve.
+
+options:
+  bundleIdPrefix: com.smitty
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Ad-hoc local signing so xcodebuild works without a Developer Team.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "YES"
+    ENABLE_HARDENED_RUNTIME: "NO"
+
+targets:
+  md-fire:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/MdFire
+        excludes:
+          - "**/.gitkeep"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.smitty.md-fire
+        PRODUCT_NAME: md-fire
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        MARKETING_VERSION: "0.1.0"
+    entitlements:
+      path: Sources/MdFire/md-fire.entitlements
+      properties:
+        # App Sandbox off for v1 (direct build) per ARCHITECTURE §8 — keeps a future
+        # Pandoc/Process path open and avoids security-scoped friction beyond bookmarks.
+        com.apple.security.app-sandbox: false
+        # Telegram Bot API (Phase 8) needs outgoing connections.
+        com.apple.security.network.client: true
