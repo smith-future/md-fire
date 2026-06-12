@@ -4,8 +4,8 @@ import STTextView
 import MarkdownCore
 
 /// SwiftUI host for the TextKit 2 editor (STTextView). Phase 2: renders a document in either editing
-/// model via the shared Styler. Re-styles on every edit; full incremental/debounced restyle and
-/// marker hiding land in the rest of Phase 2.
+/// model via one pipeline. The Coordinator parses once and shares the nodes between the Styler
+/// (attributes) and the MarkupHider (WYSIWYG marker collapse via the content-storage delegate).
 struct TextKitEditor: NSViewRepresentable {
     let text: String
     let mode: RenderMode
@@ -30,8 +30,14 @@ struct TextKitEditor: NSViewRepresentable {
         scrollView.backgroundColor = theme.palette.bg
         scrollView.drawsBackground = true
 
+        // NOTE: content-storage display substitution (returning shorter paragraphs from
+        // textContentStorage.delegate) breaks STTextView's layout/selection, which assumes display
+        // length == storage length. WYSIWYG hiding is therefore attribute-based (near-zero-width,
+        // transparent markers) in LiveWYSIWYGPolicy — storage length stays intact.
+        let nodes = coordinator.parser.parse(text)
+
         textView.text = text
-        coordinator.restyle()
+        coordinator.applyStyle(nodes: nodes, mode: mode, theme: theme)
         return scrollView
     }
 
@@ -57,6 +63,7 @@ struct TextKitEditor: NSViewRepresentable {
         var theme: Theme
         var isProgrammatic = false
         var onChange: ((String) -> Void)?
+        let parser = TreeSitterParser()
         private let styler = Styler()
 
         init(mode: RenderMode, theme: Theme) {
@@ -64,13 +71,17 @@ struct TextKitEditor: NSViewRepresentable {
             self.theme = theme
         }
 
-        private var policy: StylePolicy {
-            mode == .liveWYSIWYG ? LiveWYSIWYGPolicy() : SyntaxVisiblePolicy()
+        func applyStyle(nodes: [SyntaxNode], mode: RenderMode, theme: Theme) {
+            guard let textView else { return }
+            let policy: StylePolicy = mode == .liveWYSIWYG ? LiveWYSIWYGPolicy() : SyntaxVisiblePolicy()
+            styler.apply(to: textView, nodes: nodes, policy: policy, theme: theme)
         }
 
+        /// Re-parse and re-style on edit.
         func restyle() {
             guard let textView else { return }
-            styler.apply(to: textView, source: textView.text ?? "", policy: policy, theme: theme)
+            let nodes = parser.parse(textView.text ?? "")
+            applyStyle(nodes: nodes, mode: mode, theme: theme)
         }
 
         func textViewDidChangeText(_ notification: Notification) {

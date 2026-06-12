@@ -55,13 +55,24 @@ public struct SyntaxVisiblePolicy: StylePolicy {
     }
 }
 
-/// Typora model: markers hidden (here via background-blend as a Stage-1 preview; true layout
-/// collapse + caret reveal + atomic ranges land in Phase 2.3). `.mdHiddenMarker` tags the runs.
+/// Typora model: markers are collapsed by shrinking them to a near-zero-width, transparent glyph —
+/// an attribute-only approach that keeps the storage length intact (so STTextView's TextKit-2 layout
+/// and selection math stay consistent, unlike content-string substitution which breaks it). The
+/// characters remain in the backing store; `.mdHiddenMarker` tags them for caret-reveal + atomic
+/// handling (next step). When revealed at the caret they'll be restored to the dim marker style.
 public struct LiveWYSIWYGPolicy: StylePolicy {
     public init() {}
     public let hidesMarkup = true
     public let revealsAtCaret = true
     public func markerAttributes(for node: SyntaxNode, theme: Theme) -> [NSAttributedString.Key: Any] {
-        [.foregroundColor: theme.palette.bg, .mdHiddenMarker: true]
+        switch node.role {
+        case .heading, .strong, .emphasis, .codeSpan, .strikethrough, .link:
+            // Collapse to a near-zero-width transparent glyph (storage length intact).
+            return [.font: theme.font(size: 0.01), .foregroundColor: NSColor.clear, .mdHiddenMarker: true]
+        default:
+            // List bullets, task checkboxes, blockquote bars, code fences — Typora keeps these
+            // as styled glyphs, so render them dimmed rather than hiding them.
+            return [.foregroundColor: theme.palette.marker]
+        }
     }
 }
