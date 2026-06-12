@@ -10,6 +10,7 @@ struct TextKitEditor: NSViewRepresentable {
     let text: String
     let mode: RenderMode
     var theme: Theme = .light
+    var onChange: ((String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(mode: mode, theme: theme) }
 
@@ -19,6 +20,7 @@ struct TextKitEditor: NSViewRepresentable {
         let textView = scrollView.documentView as! STTextView
         let coordinator = context.coordinator
         coordinator.textView = textView
+        coordinator.onChange = onChange
 
         textView.textDelegate = coordinator
         textView.isHorizontallyResizable = false   // wrap to the view width
@@ -41,6 +43,8 @@ struct TextKitEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.onChange = onChange
+        let appearanceChanged = coordinator.mode != mode || coordinator.theme.palette.bg != theme.palette.bg
         coordinator.mode = mode
         coordinator.theme = theme
         guard let textView = coordinator.textView else { return }
@@ -48,12 +52,13 @@ struct TextKitEditor: NSViewRepresentable {
         textView.insertionPointColor = theme.palette.accent
         scrollView.backgroundColor = theme.palette.bg
         if textView.text != text {
+            // External change (file opened / new doc) — sync the view and re-parse.
             coordinator.isProgrammatic = true
             textView.text = text
             coordinator.isProgrammatic = false
             coordinator.reparseAndStyle()
-        } else {
-            coordinator.restyle()   // mode/theme may have changed
+        } else if appearanceChanged {
+            coordinator.reparseAndStyle()   // mode or theme toggled
         }
     }
 

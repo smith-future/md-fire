@@ -2,10 +2,11 @@ import SwiftUI
 import MarkdownCore
 
 /// The real app shell (Phase 3): a single editor in a fixed, centered reading column on a full-bleed
-/// canvas, with a slim bottom status bar carrying the mode toggle, measure, and word count. Replaces
-/// the side-by-side dev harness. Sidebar (file tree + outline) arrives in Phase 5.
+/// canvas, with a slim bottom status bar carrying the mode toggle, measure, and word count. Sidebar
+/// (file tree + outline) arrives in Phase 5.
 struct RootView: View {
-    @State private var text = Self.sample
+    let document: MarkdownDocument
+
     @State private var mode: RenderMode = .liveWYSIWYG
     @State private var measure = 72
     @State private var isDark = false
@@ -17,13 +18,19 @@ struct RootView: View {
             Color(theme.palette.bg).ignoresSafeArea()
 
             // Fixed, centered reading column — the iA "measure".
-            TextKitEditor(text: text, mode: mode, theme: theme)
-                .frame(maxWidth: theme.columnWidth(chars: measure))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            TextKitEditor(
+                text: document.text,
+                mode: mode,
+                theme: theme,
+                onChange: { document.userEdited($0) }
+            )
+            .frame(maxWidth: theme.columnWidth(chars: measure))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             statusBar
         }
         .preferredColorScheme(isDark ? .dark : .light)
+        .navigationTitle(document.displayName)
     }
 
     private var statusBar: some View {
@@ -42,14 +49,18 @@ struct RootView: View {
             .pickerStyle(.segmented)
             .frame(width: 130)
 
-            Button {
-                isDark.toggle()
-            } label: {
+            Button { isDark.toggle() } label: {
                 Image(systemName: isDark ? "sun.max" : "moon")
             }
             .buttonStyle(.borderless)
 
             Spacer()
+
+            Text(document.displayName + (document.isDirty ? " •" : ""))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            Text("·").foregroundStyle(.tertiary)
 
             Text("\(wordCount) words")
                 .font(.system(size: 11, design: .monospaced))
@@ -61,31 +72,6 @@ struct RootView: View {
     }
 
     private var wordCount: Int {
-        text.split { $0 == " " || $0 == "\n" || $0 == "\t" }.count
+        document.text.split { $0 == " " || $0 == "\n" || $0 == "\t" }.count
     }
-
-    static let sample = """
-    # md-fire
-
-    A native macOS editor: **Typora** live preview × _iA Writer_ focus.
-
-    ## Why it exists
-
-    One Markdown source, two modes. Switch with the toggle below — the text never changes,
-    only how `markers` are shown. Inline `code`, **strong**, _emphasis_, and ~~strikethrough~~.
-
-    ### Checklist
-
-    - [x] tree-sitter parser
-    - [x] native gap-free WYSIWYG
-    - [ ] focus & typewriter mode
-
-    > Presentation never touches the file. What you save is plain Markdown.
-
-    ```swift
-    let engine = TextKitEditor(text: source, mode: .liveWYSIWYG)
-    ```
-
-    See [the design docs](docs/PRODUCT.md) for the full plan.
-    """
 }
