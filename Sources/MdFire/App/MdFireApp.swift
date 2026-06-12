@@ -1,4 +1,5 @@
 import SwiftUI
+import MarkdownCore
 
 /// md-fire — a native macOS markdown editor fusing Typora's live WYSIWYG with
 /// iA Writer's focus + typography. Phase 0: a runnable empty shell.
@@ -16,8 +17,12 @@ struct MdFireApp: App {
     }
 }
 
-/// Temporary Phase-0 placeholder. Replaced by RootView (NavigationSplitView) in Phase 3.
+/// Temporary Phase-1 placeholder. Replaced by RootView (NavigationSplitView) in Phase 3.
+/// Parses a sample through MarkdownCore to prove the engine is wired into the app.
 private struct ScaffoldView: View {
+    private static let sample = "# md-fire\n\n**Typora** × _iA Writer_. Live `markdown`.\n"
+    private let nodeCount = TreeSitterParser().parse(sample).count
+
     var body: some View {
         ZStack {
             BrandColor.lightCanvas.ignoresSafeArea() // iA confirmed #F5F6F6, never pure white
@@ -25,7 +30,7 @@ private struct ScaffoldView: View {
                 Text("md-fire")
                     .font(.system(size: 30, weight: .semibold, design: .monospaced))
                     .foregroundStyle(BrandColor.lightBody)   // iA confirmed #424242
-                Text("Phase 0 — scaffold alive")
+                Text("Phase 1 — MarkdownCore parsed \(nodeCount) nodes")
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(BrandColor.marker)      // ~#B0B0AE
             }

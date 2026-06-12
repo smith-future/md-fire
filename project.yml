@@ -24,17 +24,10 @@ settings:
     ENABLE_HARDENED_RUNTIME: "NO"
 
 packages:
-  # Phase 1 deps — incremental parser + export oracle.
-  SwiftTreeSitter:
-    url: https://github.com/tree-sitter/swift-tree-sitter
-    from: "0.8.0"
-  TreeSitterMarkdown:
-    # split_parser branch ships the block + inline grammars with a Package.swift.
-    url: https://github.com/tree-sitter-grammars/tree-sitter-markdown
-    branch: split_parser
-  swift-markdown:
-    url: https://github.com/swiftlang/swift-markdown
-    branch: main
+  # App-internal pure logic: tree-sitter parser, range mapping, cmark export oracle.
+  # Brings SwiftTreeSitter + tree-sitter-markdown + swift-markdown transitively.
+  MarkdownCore:
+    path: Packages/MarkdownCore
 
 targets:
   md-fire:
@@ -62,9 +55,5 @@ targets:
         # Telegram Bot API (Phase 8) needs outgoing connections.
         com.apple.security.network.client: true
     dependencies:
-      - package: SwiftTreeSitter
-        product: SwiftTreeSitter
-      - package: TreeSitterMarkdown
-        product: TreeSitterMarkdown
-      - package: swift-markdown
-        product: Markdown
+      - package: MarkdownCore
+        product: MarkdownCore
