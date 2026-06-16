@@ -42,11 +42,13 @@ targets:
       - path: Sources/MdFire
         excludes:
           - "**/.gitkeep"
+      - path: Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.smitty.md-fire
         PRODUCT_NAME: md-fire
         GENERATE_INFOPLIST_FILE: "YES"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         MARKETING_VERSION: "0.1.0"
