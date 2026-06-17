@@ -7,10 +7,11 @@ import SwiftUI
 @main
 struct MdFireApp: App {
     @State private var document = MarkdownDocument()
+    @State private var workspace = WorkspaceModel()
 
     var body: some Scene {
         WindowGroup {
-            RootView(document: document)
+            RootView(document: document, workspace: workspace)
                 .frame(minWidth: 640, minHeight: 480)
         }
         .windowStyle(.hiddenTitleBar)               // UI-DESIGN §4.1: chromeless
@@ -21,6 +22,8 @@ struct MdFireApp: App {
                     .keyboardShortcut("n")
                 Button("Open…") { document.open() }
                     .keyboardShortcut("o")
+                Button("Open Folder…") { workspace.openFolder() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Save") { document.save() }

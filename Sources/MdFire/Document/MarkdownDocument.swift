@@ -42,6 +42,13 @@ final class MarkdownDocument {
         load(url)
     }
 
+    /// Open a file chosen from the workspace sidebar (with the unsaved-changes guard).
+    func openFile(at url: URL) {
+        guard url != fileURL else { return }
+        guard confirmDiscardIfNeeded() else { return }
+        load(url)
+    }
+
     func load(_ url: URL) {
         do {
             text = try String(contentsOf: url, encoding: .utf8)

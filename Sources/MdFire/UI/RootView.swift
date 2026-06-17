@@ -1,23 +1,69 @@
 import SwiftUI
 import MarkdownCore
 
-/// The real app shell (Phase 3): a single editor in a fixed, centered reading column on a full-bleed
-/// canvas, with a slim bottom status bar carrying the mode toggle, measure, and word count. Sidebar
-/// (file tree + outline) arrives in Phase 5.
+/// The app shell: a sidebar (workspace file tree) + the editor in a fixed, centered reading column,
+/// with a slim bottom status bar (mode, measure, focus, typewriter, theme, word count).
 struct RootView: View {
     let document: MarkdownDocument
+    let workspace: WorkspaceModel
 
     @State private var mode: RenderMode = .liveWYSIWYG
     @State private var measure = 72
     @State private var isDark = false
     @State private var focus: FocusScope = .off
     @State private var typewriter = false
+    @State private var selectedFile: URL?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isDropTargeted = false
 
     private var theme: Theme { isDark ? .dark : .light }
 
     var body: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            FileTreeView(workspace: workspace, selection: $selectedFile)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
+        } detail: {
+            editorArea
+        }
+        .preferredColorScheme(isDark ? .dark : .light)
+        .navigationTitle(document.displayName)
+        .onChange(of: selectedFile) { _, newValue in
+            if let url = newValue, !isDirectory(url) { document.openFile(at: url) }
+        }
+        // Drag a file/folder from Finder anywhere onto the window to open it.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first else { return false }
+            return handleDrop(url)
+        } isTargeted: { isDropTargeted = $0 }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color(theme.palette.accent), lineWidth: 3)
+                    .padding(3)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func handleDrop(_ url: URL) -> Bool {
+        if isDirectory(url) {
+            workspace.setRoot(url)
+            return true
+        }
+        guard WorkspaceModel.markdownExtensions.contains(url.pathExtension.lowercased()) else {
+            return false
+        }
+        document.openFile(at: url)
+        if workspace.root == nil {
+            // Adopt the dropped file's folder as the workspace so the sidebar isn't empty.
+            workspace.setRoot(url.deletingLastPathComponent())
+        }
+        selectedFile = url
+        return true
+    }
+
+    private var editorArea: some View {
         VStack(spacing: 0) {
-            // Fixed, centered reading column — the iA "measure".
             TextKitEditor(
                 text: document.text,
                 mode: mode,
@@ -29,55 +75,51 @@ struct RootView: View {
             .frame(maxWidth: theme.columnWidth(chars: measure))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            statusBar   // below the editor, not overlapping it
+            statusBar
         }
         .background(Color(theme.palette.bg))
-        .preferredColorScheme(isDark ? .dark : .light)
-        .navigationTitle(document.displayName)
     }
 
     private var statusBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
+            Button { toggleSidebar() } label: { Image(systemName: "sidebar.left") }
+                .buttonStyle(.borderless)
+                .help("Toggle sidebar")
+
             Picker("", selection: $mode) {
                 ForEach(RenderMode.allCases) { Text($0.label).tag($0) }
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 150)
+            .frame(width: 140)
 
             Picker("", selection: $measure) {
                 ForEach([64, 72, 80], id: \.self) { Text("\($0)").tag($0) }
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 130)
+            .frame(width: 120)
 
             Picker("Focus", selection: $focus) {
                 ForEach(FocusScope.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .pickerStyle(.menu)
-            .frame(width: 130)
+            .frame(width: 120)
 
-            Button { typewriter.toggle() } label: {
-                Image(systemName: "keyboard")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(typewriter ? Color(theme.palette.accent) : Color.secondary)
-            .help("Typewriter mode — keep the current line centered")
+            Button { typewriter.toggle() } label: { Image(systemName: "keyboard") }
+                .buttonStyle(.borderless)
+                .foregroundStyle(typewriter ? Color(theme.palette.accent) : Color.secondary)
+                .help("Typewriter mode — keep the current line centered")
 
-            Button { isDark.toggle() } label: {
-                Image(systemName: isDark ? "sun.max" : "moon")
-            }
-            .buttonStyle(.borderless)
+            Button { isDark.toggle() } label: { Image(systemName: isDark ? "sun.max" : "moon") }
+                .buttonStyle(.borderless)
 
             Spacer()
 
             Text(document.displayName + (document.isDirty ? " •" : ""))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
-
             Text("·").foregroundStyle(.tertiary)
-
             Text("\(wordCount) words")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -89,5 +131,15 @@ struct RootView: View {
 
     private var wordCount: Int {
         document.text.split { $0 == " " || $0 == "\n" || $0 == "\t" }.count
+    }
+
+    private func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+    }
+
+    private func toggleSidebar() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        }
     }
 }
