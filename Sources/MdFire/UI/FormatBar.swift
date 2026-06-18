@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// The floating formatting bar shown above a text selection. Buttons wrap the selection in Markdown.
+/// The floating formatting bar shown above a text selection. The marker buttons wrap the selection
+/// in Markdown; the trailing button copies the selected text in Telegram-markdown for pasting.
 struct FormatBar: View {
     let apply: (InlineFormat) -> Void
+    let copyTelegram: () -> Void
+
+    @State private var copied = false
 
     var body: some View {
         HStack(spacing: 1) {
@@ -10,6 +14,22 @@ struct FormatBar: View {
             button("italic", .italic, help: "Italic")
             button("curlybraces", .code, help: "Code")
             button("strikethrough", .strikethrough, help: "Strikethrough")
+
+            Divider().frame(height: 18)
+
+            Button {
+                copyTelegram()
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+            } label: {
+                Image(systemName: copied ? "checkmark" : "paperplane.fill")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(copied ? Color.green : Color.accentColor)
+                    .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help(copied ? "Copied!" : "Copy selection for Telegram")
         }
         .padding(3)
     }

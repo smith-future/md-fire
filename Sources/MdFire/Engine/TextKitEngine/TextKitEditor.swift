@@ -115,9 +115,12 @@ struct TextKitEditor: NSViewRepresentable {
             popover.behavior = .transient
             popover.animates = false
             popover.contentViewController = NSHostingController(
-                rootView: FormatBar(apply: { [weak self] format in self?.applyFormat(format) })
+                rootView: FormatBar(
+                    apply: { [weak self] format in self?.applyFormat(format) },
+                    copyTelegram: { [weak self] in self?.copySelectionToTelegram() }
+                )
             )
-            popover.contentSize = NSSize(width: 130, height: 30)
+            popover.contentSize = NSSize(width: 170, height: 30)
             return popover
         }()
 
@@ -344,6 +347,16 @@ struct TextKitEditor: NSViewRepresentable {
                 textView.insertText(marker + marker, replacementRange: selection)
                 textView.textSelection = NSRange(location: selection.location + marker.count, length: 0)
             }
+        }
+
+        /// Copy the current selection, converted to Telegram-markdown, to the pasteboard.
+        func copySelectionToTelegram() {
+            guard let textView else { return }
+            let selection = textView.textSelection
+            guard selection.length > 0 else { return }
+            let ns = (textView.text ?? "") as NSString
+            guard NSMaxRange(selection) <= ns.length else { return }
+            TelegramFormatter.copyToPasteboard(from: ns.substring(with: selection))
         }
 
         // MARK: - Floating format bar
