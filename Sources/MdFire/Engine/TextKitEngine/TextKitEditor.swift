@@ -18,7 +18,7 @@ struct TextKitEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(mode: mode, theme: theme) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = STTextView.scrollableTextView()
+        let scrollView = FillingTextView.scrollableTextView()
         // swiftlint:disable:next force_cast
         let textView = scrollView.documentView as! STTextView
         let coordinator = context.coordinator
