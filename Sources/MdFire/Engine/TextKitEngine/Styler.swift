@@ -10,7 +10,8 @@ struct Styler {
     /// caret shows its markers (reveal) instead of collapsing them. `focusActive`, when set, is the
     /// bright Focus-Mode range — everything outside it is dimmed.
     func apply(to textView: STTextView, nodes: [SyntaxNode], policy: StylePolicy, theme: Theme,
-               revealLocation: Int? = nil, focusActive: NSRange? = nil) {
+               revealLocation: Int? = nil, focusActive: NSRange? = nil,
+               posTags: [(NSRange, NSColor)] = []) {
         let nsLen = (textView.text as NSString?)?.length ?? 0
         guard nsLen > 0 else { return }
         let full = NSRange(location: 0, length: nsLen)
@@ -37,6 +38,12 @@ struct Styler {
             for range in node.markerRanges where isValid(range, nsLen) {
                 textView.addAttributes(marker, range: range)
             }
+        }
+
+        // Parts-of-speech highlight (iA): colour words by lexical class. Editor-only; applied before
+        // Focus so dimming still wins outside the active span.
+        for (range, color) in posTags where isValid(range, nsLen) {
+            textView.addAttributes([.foregroundColor: color], range: range)
         }
 
         // Focus Mode: a "spotlight" — the active span is full color; text fades to dim with distance,

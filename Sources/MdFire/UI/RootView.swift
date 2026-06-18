@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var isDark = false
     @State private var focus: FocusScope = .off
     @State private var typewriter = false
+    @State private var posHighlight = false
     @State private var selectedFile: URL?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isDropTargeted = false
@@ -77,6 +78,7 @@ struct RootView: View {
                 theme: theme,
                 focusScope: focus,
                 typewriter: typewriter,
+                posHighlight: posHighlight,
                 controller: editor,
                 onChange: { document.userEdited($0) }
             )
@@ -118,6 +120,11 @@ struct RootView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(typewriter ? Color(theme.palette.accent) : Color.secondary)
                 .help("Typewriter mode — keep the current line centered")
+
+            Button { posHighlight.toggle() } label: { Image(systemName: "a.square") }
+                .buttonStyle(.borderless)
+                .foregroundStyle(posHighlight ? Color(theme.palette.accent) : Color.secondary)
+                .help("Highlight parts of speech (nouns, verbs, adjectives…)")
 
             Button { isDark.toggle() } label: { Image(systemName: isDark ? "sun.max" : "moon") }
                 .buttonStyle(.borderless)

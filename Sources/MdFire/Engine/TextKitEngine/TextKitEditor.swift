@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import NaturalLanguage
 import STTextView
 import MarkdownCore
 
@@ -12,6 +13,7 @@ struct TextKitEditor: NSViewRepresentable {
     var theme: Theme = .light
     var focusScope: FocusScope = .off
     var typewriter: Bool = false
+    var posHighlight: Bool = false
     var controller: EditorController? = nil
     var onChange: ((String) -> Void)? = nil
 
@@ -26,6 +28,7 @@ struct TextKitEditor: NSViewRepresentable {
         coordinator.onChange = onChange
         coordinator.focusScope = focusScope
         coordinator.typewriter = typewriter
+        coordinator.posHighlight = posHighlight
 
         textView.textDelegate = coordinator
         textView.isHorizontallyResizable = false   // wrap to the view width
@@ -55,11 +58,13 @@ struct TextKitEditor: NSViewRepresentable {
         let appearanceChanged = coordinator.mode != mode
             || coordinator.theme.palette.bg != theme.palette.bg
             || coordinator.focusScope != focusScope
+            || coordinator.posHighlight != posHighlight
         let typewriterChanged = coordinator.typewriter != typewriter
         coordinator.mode = mode
         coordinator.theme = theme
         coordinator.focusScope = focusScope
         coordinator.typewriter = typewriter
+        coordinator.posHighlight = posHighlight
         guard let textView = coordinator.textView else { return }
         textView.backgroundColor = theme.palette.bg
         textView.insertionPointColor = theme.palette.accent
@@ -86,9 +91,11 @@ struct TextKitEditor: NSViewRepresentable {
         var onChange: ((String) -> Void)?
         var focusScope: FocusScope = .off
         var typewriter = false
+        var posHighlight = false
         let parser = TreeSitterParser()
         private let styler = Styler()
         private var nodes: [SyntaxNode] = []
+        private var posTags: [(NSRange, NSColor)] = []
 
         private var lastFocusActive: NSRange?
         private var isRestyling = false
@@ -172,8 +179,37 @@ struct TextKitEditor: NSViewRepresentable {
 
         /// Re-parse (text changed) then style with caret awareness.
         func reparseAndStyle() {
-            nodes = parser.parse(textView?.text ?? "")
+            let text = textView?.text ?? ""
+            nodes = parser.parse(text)
+            posTags = posHighlight ? Self.partsOfSpeech(in: text) : []
             restyle()
+        }
+
+        /// Words coloured by lexical class (NaturalLanguage). Computed on text/toggle change, cached.
+        static func partsOfSpeech(in text: String) -> [(NSRange, NSColor)] {
+            guard !text.isEmpty else { return [] }
+            let tagger = NLTagger(tagSchemes: [.lexicalClass])
+            tagger.string = text
+            var out: [(NSRange, NSColor)] = []
+            tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word,
+                                 scheme: .lexicalClass, options: [.omitWhitespace, .omitPunctuation]) { tag, range in
+                if let tag, let color = posColor(tag) {
+                    out.append((NSRange(range, in: text), color))
+                }
+                return true
+            }
+            return out
+        }
+
+        private static func posColor(_ tag: NLTag) -> NSColor? {
+            switch tag {
+            case .noun: return NSColor(rgb: 0xC8402F)        // red
+            case .verb: return NSColor(rgb: 0x2E7DD1)        // blue
+            case .adjective: return NSColor(rgb: 0x9A6A3A)   // brown
+            case .adverb: return NSColor(rgb: 0x8E5BA6)      // purple
+            case .conjunction: return NSColor(rgb: 0x4F9A4F) // green
+            default: return nil
+            }
         }
 
         /// Re-apply styling using the cached parse: reveal markers under the caret and dim for Focus.
@@ -187,7 +223,7 @@ struct TextKitEditor: NSViewRepresentable {
             let focusActive = focusActiveRange(caret: anchor)
             lastFocusActive = focusActive
             styler.apply(to: textView, nodes: nodes, policy: policy, theme: theme,
-                         revealLocation: caret, focusActive: focusActive)
+                         revealLocation: caret, focusActive: focusActive, posTags: posTags)
             if typewriter { centerCaretLine() }
         }
 
