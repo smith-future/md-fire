@@ -15,6 +15,7 @@ struct TextKitEditor: NSViewRepresentable {
     var typewriter: Bool = false
     var posHighlight: Bool = false
     var bionic: Bool = false
+    var reduceMotion: Bool = false
     var controller: EditorController? = nil
     var onChange: ((String) -> Void)? = nil
 
@@ -31,6 +32,7 @@ struct TextKitEditor: NSViewRepresentable {
         coordinator.typewriter = typewriter
         coordinator.posHighlight = posHighlight
         coordinator.bionic = bionic
+        coordinator.reduceMotion = reduceMotion
 
         textView.textDelegate = coordinator
         textView.isHorizontallyResizable = false   // wrap to the view width
@@ -69,6 +71,7 @@ struct TextKitEditor: NSViewRepresentable {
         coordinator.typewriter = typewriter
         coordinator.posHighlight = posHighlight
         coordinator.bionic = bionic
+        coordinator.reduceMotion = reduceMotion   // read live in didScroll; no restyle needed
         guard let textView = coordinator.textView else { return }
         textView.backgroundColor = theme.palette.bg
         textView.insertionPointColor = theme.palette.accent
@@ -97,6 +100,7 @@ struct TextKitEditor: NSViewRepresentable {
         var typewriter = false
         var posHighlight = false
         var bionic = false
+        var reduceMotion = false
         let parser = TreeSitterParser()
         private let styler = Styler()
         private var nodes: [SyntaxNode] = []
@@ -133,6 +137,9 @@ struct TextKitEditor: NSViewRepresentable {
         }
 
         @objc private func didScroll() {
+            // Reduce Motion: don't let the Focus spotlight chase the scroll — it re-lights only on
+            // caret moves (textViewDidChangeSelection), so reading no longer animates a moving band.
+            guard !reduceMotion else { return }
             guard focusScope.dims, !isRestyling else { return }
             let candidate = focusActiveRange(caret: focusAnchor())
             guard candidate != lastFocusActive else { return }   // throttle: nothing new to light

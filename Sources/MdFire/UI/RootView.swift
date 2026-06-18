@@ -7,6 +7,7 @@ struct RootView: View {
     let document: MarkdownDocument
     let workspace: WorkspaceModel
     let editor: EditorController
+    let settings: AppSettings
 
     @State private var mode: RenderMode = .liveWYSIWYG
     @State private var measure = 72
@@ -19,6 +20,8 @@ struct RootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isDropTargeted = false
     @State private var telegramCopied = false
+    @State private var statusIdle = false
+    @State private var idleWork: DispatchWorkItem?
 
     private var theme: Theme { isDark ? .dark : .light }
 
@@ -81,6 +84,7 @@ struct RootView: View {
                 typewriter: typewriter,
                 posHighlight: posHighlight,
                 bionic: bionic,
+                reduceMotion: settings.reduceMotion,
                 controller: editor,
                 onChange: { document.userEdited($0) }
             )
@@ -90,6 +94,13 @@ struct RootView: View {
             statusBar
         }
         .background(Color(theme.palette.bg))
+        // Status bar fades out after a few seconds of inactivity; any typing or mouse movement
+        // over the editor (status bar included) wakes it back up.
+        .onChange(of: document.text) { _, _ in bumpStatusActivity() }
+        .onContinuousHover { phase in
+            if case .active = phase { bumpStatusActivity() }
+        }
+        .onAppear { bumpStatusActivity() }
     }
 
     private var statusBar: some View {
@@ -149,19 +160,30 @@ struct RootView: View {
             .tint(telegramCopied ? Color.green : Color(theme.palette.accent))
             .help("Copy the document formatted for Telegram, then paste it into a chat")
 
-            Text("\(wordCount) words")
+            // Reading stats. NOT .fixedSize() — that forces the whole HStack wider than a narrow
+            // window's first layout pass and re-triggers the AutoLayout overflow crash (CLAUDE.md).
+            // Low layout priority + tail truncation: it yields space before the pickers/buttons,
+            // yet shows in full at any normal window size.
+            Text("\(wordCount) words · \(readingMinutes) min read")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .fixedSize()
+                .truncationMode(.tail)
+                .layoutPriority(-1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .background(.bar)
+        .opacity(statusIdle ? 0.18 : 1)
     }
 
     private var wordCount: Int {
         document.text.split { $0 == " " || $0 == "\n" || $0 == "\t" }.count
+    }
+
+    /// Estimated reading time in whole minutes (≥1), reusing `wordCount` — no extra text scan.
+    private var readingMinutes: Int {
+        max(1, Int((Double(wordCount) / Double(settings.readingWPM)).rounded()))
     }
 
     private func isDirectory(_ url: URL) -> Bool {
@@ -169,8 +191,22 @@ struct RootView: View {
     }
 
     private func toggleSidebar() {
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(settings.reduceMotion ? nil : .easeInOut(duration: 0.18)) {
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
         }
+    }
+
+    /// Mark the user as active: restore the status bar now and re-arm the fade timer. Every call
+    /// cancels the pending fade first, so overlapping timers never flicker the bar.
+    private func bumpStatusActivity() {
+        if statusIdle {
+            withAnimation(settings.statusFadeAnimation) { statusIdle = false }
+        }
+        idleWork?.cancel()
+        let work = DispatchWorkItem {
+            withAnimation(settings.statusFadeAnimation) { statusIdle = true }
+        }
+        idleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 }

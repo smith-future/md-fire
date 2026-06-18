@@ -9,10 +9,11 @@ struct MdFireApp: App {
     @State private var document = MarkdownDocument()
     @State private var workspace = WorkspaceModel()
     @State private var editor = EditorController()
+    @State private var settings = AppSettings()
 
     var body: some Scene {
         WindowGroup {
-            RootView(document: document, workspace: workspace, editor: editor)
+            RootView(document: document, workspace: workspace, editor: editor, settings: settings)
                 .frame(minWidth: 640, minHeight: 480)
         }
         .windowStyle(.hiddenTitleBar)               // UI-DESIGN §4.1: chromeless
