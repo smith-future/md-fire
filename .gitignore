@@ -3,6 +3,8 @@
 
 # Xcode / build
 build/
+.build-release/
+dist/
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/

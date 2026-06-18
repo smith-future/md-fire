@@ -1,32 +1,143 @@
-# md-fire
+<div align="center">
 
-A native macOS markdown editor that fuses **Typora's seamless live WYSIWYG** with
-**iA Writer's focus, typography, and restraint**. Built in native Swift (SwiftUI +
-AppKit/TextKit 2). No Electron, no Tauri.
+# 🔥 md-fire
 
-> One Markdown source of truth. Two switchable editing models (live WYSIWYG ↔
-> syntax-visible) that are the *same* render pipeline with two booleans. Presentation
-> effects never touch the file — what you save is always plain Markdown.
+**Нативный macOS-редактор Markdown, в котором `.md`-файлы наконец-то приятно читать.**
 
-## Status
+Живой WYSIWYG как в **Typora** + фокус, типографика и тишина как в **iA Writer**.
+Чистый Swift (SwiftUI + AppKit / TextKit 2). Никакого Electron.
 
-**Phase 0 — scaffold.** Runnable empty shell. See `docs/BUILD-PLAN.md` for the roadmap.
+### ⬇️ [Скачать md-fire.dmg](./md-fire.dmg)
 
-## Design docs
+`macOS 14+` · `Apple Silicon (M1+)` · `v0.1.0` · ~7 МБ
 
-- [`docs/PRODUCT.md`](docs/PRODUCT.md) — vision, v1 feature spec, acceptance criteria, non-goals
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — rendering-engine decision, module tree, dual-mode design
-- [`docs/UI-DESIGN.md`](docs/UI-DESIGN.md) — colors, typography, layout, motion
-- [`docs/BUILD-PLAN.md`](docs/BUILD-PLAN.md) — phased plan, empty repo → v1
+</div>
 
-## Develop
+---
 
-Requires Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
-The Xcode project is generated from `project.yml` (the source of truth) and is git-ignored.
+## Зачем это вообще
+
+Проект родился из боли **вайбкодинга**. Когда пишешь код вместе с ИИ, он генерит горы
+Markdown: планы, спеки, `README`, заметки, чек-листы, `ARCHITECTURE.md`. И всё это ты
+читаешь в сером моноширинном редакторе кода, где `# заголовок`, `**жирный**` и `- список` —
+это просто текст со звёздочками и решётками. Глаза устают, структура теряется, читать
+длинный план невозможно.
+
+**md-fire** — это отдельное, красивое и тихое место, чтобы *читать* и *править* Markdown.
+Открыл папку проекта → кликнул на `.md` → видишь нормально свёрстанный документ, а не
+сырой текст. Маркеры прячутся, пока курсор не зайдёт внутрь; шрифт и колонка настроены под
+чтение; лишний интерфейс убран. Тот же файл на диске остаётся обычным валидным Markdown —
+md-fire ничего в него не дописывает.
+
+> Это инструмент для чтения и письма, а не «процессор документов». Главная цель — чтобы
+> читать ИИ-простыни было так же спокойно, как хорошую статью.
+
+---
+
+## Возможности
+
+- **Живой WYSIWYG (режим Typora).** Маркеры (`#`, `*`, `_`, `` ` ``, `>`, списки) скрыты, текст
+  свёрстан как в готовом документе. Курсор заходит в элемент — его маркеры подсвечиваются
+  тускло, чтобы их можно было править; уходит — снова прячутся. Файл на диске не меняется.
+- **Режим «честного исходника» (iA-style).** Все маркеры видны, но деликатно приглушены:
+  тусклые разделители, цветные заголовки, моноширинный код.
+- **Focus Mode.** Затемняет всё, кроме активного предложения / строки / абзаца. Градиентный
+  «прожектор» следует за прокруткой при чтении.
+- **Typewriter Mode.** Строка с курсором всегда по центру экрана.
+- **Боковая панель.** Папка как воркспейс: дерево файлов с drag-and-drop, **Outline** текущего
+  документа, запоминание последней папки между запусками.
+- **Bionic reading.** Подсвечивает начало каждого слова жирным — глаз цепляется и читает быстрее.
+- **Подсветка частей речи** (Apple NaturalLanguage): существительные, глаголы, прилагательные…
+- **Reading time** в статус-баре + **затухание статус-бара** при бездействии + полная поддержка
+  системного **Reduce Motion**.
+- **Экспорт в PDF и HTML.**
+- **Copy for Telegram** — копирует документ в формате, который Telegram реально понимает
+  (`**bold**`, `__italic__`), чтобы вставить в чат без возни.
+- **Inline-форматирование:** ⌘B / ⌘I / ⌘E, плавающая панель форматирования над выделением,
+  пункт «Format» в контекстном меню.
+- **Чистый UI:** скрытый заголовок окна, центрированная колонка чтения (64 / 72 / 80 символов),
+  слим-статус-бар. Своя иконка-пламя (cyan → violet).
+
+---
+
+## Установка
+
+> Приложение пока **не подписано Apple Developer ID** (это ранняя версия), поэтому при первом
+> запуске macOS осторожничает. Это нормально — ниже два клика, чтобы открыть.
+
+1. Скачайте **[md-fire.dmg](./md-fire.dmg)** и откройте его (двойной клик).
+2. Перетащите **md-fire** в папку **Программы** (она тут же, в окне DMG).
+3. **Первый запуск:** в папке «Программы» кликните по `md-fire` **правой кнопкой → «Открыть»**,
+   затем ещё раз **«Открыть»** в диалоге. Дальше запускается как обычно (двойным кликом).
+
+Если macOS всё равно не пускает: **Системные настройки → Конфиденциальность и безопасность →**
+прокрутите вниз → **«Открыть всё равно»** напротив md-fire.
+
+<details>
+<summary>Альтернатива через терминал</summary>
 
 ```sh
-make project   # generate md-fire.xcodeproj from project.yml
-make build     # build from CLI
-make run       # build and launch
-make open      # open in Xcode
+xattr -dr com.apple.quarantine /Applications/md-fire.app
 ```
+</details>
+
+---
+
+## Горячие клавиши
+
+| Действие | Клавиши |
+|---|---|
+| Новый документ | `⌘N` |
+| Открыть файл | `⌘O` |
+| Открыть папку | `⌘⇧O` |
+| Сохранить / Сохранить как | `⌘S` / `⌘⇧S` |
+| Жирный / Курсив / Код | `⌘B` / `⌘I` / `⌘E` |
+| Зачёркнутый | `⌘⇧X` |
+| Copy for Telegram | `⌘⇧C` |
+| Экспорт PDF / HTML | меню **File → Export** |
+
+Режимы (Focus, Typewriter, Bionic, части речи, тёмная тема, ширина колонки) переключаются в
+меню статус-бара (иконка ползунков) и пикерах внизу.
+
+---
+
+## Сборка из исходников
+
+`.xcodeproj` генерируется из `project.yml` через [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(сам проект в git не коммитится).
+
+```sh
+brew install xcodegen          # если ещё нет
+xcodegen generate              # сгенерировать md-fire.xcodeproj
+make build                     # или: xcodebuild -scheme md-fire -configuration Debug build
+make run                       # собрать и запустить
+
+make dmg                       # собрать Release и упаковать md-fire.dmg
+swift test --package-path Packages/MarkdownCore   # юнит-тесты парсера
+```
+
+---
+
+## Архитектура (кратко)
+
+- **`Packages/MarkdownCore`** — чистая логика (локальный SwiftPM, покрыт тестами): tree-sitter
+  парсер (раздельные block+inline грамматики → `SyntaxNode`), маппинг диапазонов, Focus-логика.
+- **`Sources/MdFire`** — приложение: SwiftUI-оболочка (`RootView` = NavigationSplitView), движок
+  редактора на **STTextView** (TextKit 2) в `Engine/TextKitEngine`, темы, экспорт, Telegram.
+
+Подробности — в `docs/{PRODUCT,ARCHITECTURE,UI-DESIGN,BUILD-PLAN}.md`.
+
+---
+
+## Статус
+
+**v0.1.0** — ранняя, но рабочая сборка для ежедневного использования.
+
+В планах: отправка в Telegram через Bot API, живое обновление дерева файлов (FSEvents),
+свайп-сайдбар, лицензионные шрифты iA.
+
+---
+
+<div align="center">
+Сделано с 🔥 для тех, кто читает много Markdown.
+</div>
