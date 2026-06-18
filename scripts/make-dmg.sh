@@ -15,7 +15,7 @@ APP="$ROOT/.build-release/Build/Products/Release/md-fire.app"
 STAGE="$ROOT/dist/dmg-stage"
 DMG="$ROOT/md-fire.dmg"
 VOL="md-fire"
-NOTE="📕 Установка — прочти меня.txt"
+NOTE="Установка — прочти меня.txt"
 
 if [ ! -d "$APP" ]; then
   echo "✗ Release build not found: $APP"
