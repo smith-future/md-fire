@@ -92,6 +92,17 @@ struct TextKitEditor: NSViewRepresentable {
 
         private var lastFocusActive: NSRange?
         private var isRestyling = false
+        private var formatBarWork: DispatchWorkItem?
+        private lazy var formatPopover: NSPopover = {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = false
+            popover.contentViewController = NSHostingController(
+                rootView: FormatBar(apply: { [weak self] format in self?.applyFormat(format) })
+            )
+            popover.contentSize = NSSize(width: 130, height: 30)
+            return popover
+        }()
 
         init(mode: RenderMode, theme: Theme) {
             self.mode = mode
@@ -271,13 +282,83 @@ struct TextKitEditor: NSViewRepresentable {
             }
         }
 
+        // MARK: - Floating format bar
+
+        /// Bounding rect of the selection in the text view's coordinates.
+        private func selectionRect() -> CGRect? {
+            guard let textView else { return nil }
+            let selection = textView.textSelection
+            guard selection.length > 0 else { return nil }
+            let layout = textView.textLayoutManager
+            let content = textView.textContentManager
+            guard let start = content.location(layout.documentRange.location, offsetBy: selection.location),
+                  let end = content.location(start, offsetBy: selection.length),
+                  let range = NSTextRange(location: start, end: end) else { return nil }
+            var rect = CGRect.null
+            layout.enumerateTextSegments(in: range, type: .selection, options: []) { _, frame, _, _ in
+                rect = rect.isNull ? frame : rect.union(frame)
+                return true
+            }
+            return rect.isNull ? nil : rect
+        }
+
+        /// Show the format bar once the selection settles (debounced so it doesn't flicker mid-drag).
+        func scheduleFormatBar() {
+            formatBarWork?.cancel()
+            guard let textView, textView.textSelection.length > 0 else {
+                if formatPopover.isShown { formatPopover.performClose(nil) }
+                return
+            }
+            let work = DispatchWorkItem { [weak self] in self?.showFormatBar() }
+            formatBarWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+        }
+
+        private func showFormatBar() {
+            guard let textView, textView.textSelection.length > 0, let rect = selectionRect() else { return }
+            if formatPopover.isShown { formatPopover.performClose(nil) }
+            formatPopover.show(relativeTo: rect, of: textView, preferredEdge: .minY)
+        }
+
+        // MARK: - Context menu (add Format, drop the iPhone-continuity clutter)
+
+        func textView(_ textView: STTextView, menu: NSMenu, for event: NSEvent, at location: any NSTextLocation) -> NSMenu? {
+            for title in ["Take Photo", "Scan Documents", "Add Sketch", "Insert from iPhone or iPad", "AutoFill"] {
+                if let item = menu.items.first(where: { $0.title == title }) { menu.removeItem(item) }
+            }
+            if textView.textSelection.length > 0 {
+                let submenu = NSMenu()
+                submenu.addItem(formatItem("Bold", .bold))
+                submenu.addItem(formatItem("Italic", .italic))
+                submenu.addItem(formatItem("Code", .code))
+                submenu.addItem(formatItem("Strikethrough", .strikethrough))
+                let root = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
+                root.submenu = submenu
+                menu.insertItem(root, at: 0)
+                menu.insertItem(.separator(), at: 1)
+            }
+            return menu
+        }
+
+        private func formatItem(_ title: String, _ format: InlineFormat) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(formatMenuAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = format
+            return item
+        }
+
+        @objc private func formatMenuAction(_ sender: NSMenuItem) {
+            if let format = sender.representedObject as? InlineFormat { applyFormat(format) }
+        }
+
         func textViewDidChangeText(_ notification: Notification) {
             reparseAndStyle()
             if !isProgrammatic, let text = textView?.text { onChange?(text) }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            restyle()   // reveal/collapse markers + Focus + typewriter follow the caret
+            restyle()             // reveal/collapse markers + Focus + typewriter follow the caret
+            scheduleFormatBar()   // show the formatting bar over a non-empty selection
         }
     }
 }
