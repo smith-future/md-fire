@@ -11,7 +11,7 @@ struct Styler {
     /// bright Focus-Mode range — everything outside it is dimmed.
     func apply(to textView: STTextView, nodes: [SyntaxNode], policy: StylePolicy, theme: Theme,
                revealLocation: Int? = nil, focusActive: NSRange? = nil,
-               posTags: [(NSRange, NSColor)] = []) {
+               posTags: [(NSRange, NSColor)] = [], bionicRanges: [NSRange] = []) {
         let nsLen = (textView.text as NSString?)?.length ?? 0
         guard nsLen > 0 else { return }
         let full = NSRange(location: 0, length: nsLen)
@@ -37,6 +37,16 @@ struct Styler {
                 : policy.markerAttributes(for: node, theme: theme)
             for range in node.markerRanges where isValid(range, nsLen) {
                 textView.addAttributes(marker, range: range)
+            }
+        }
+
+        // Bionic reading: bold the leading part of each word, preserving its current size/family.
+        if !bionicRanges.isEmpty,
+           let storage = (textView.textContentManager as? NSTextContentStorage)?.textStorage {
+            for range in bionicRanges where isValid(range, nsLen) && range.length > 0 {
+                let base = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont) ?? theme.bodyFont
+                let bold = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
+                textView.addAttributes([.font: bold], range: range)
             }
         }
 

@@ -14,6 +14,7 @@ struct TextKitEditor: NSViewRepresentable {
     var focusScope: FocusScope = .off
     var typewriter: Bool = false
     var posHighlight: Bool = false
+    var bionic: Bool = false
     var controller: EditorController? = nil
     var onChange: ((String) -> Void)? = nil
 
@@ -29,6 +30,7 @@ struct TextKitEditor: NSViewRepresentable {
         coordinator.focusScope = focusScope
         coordinator.typewriter = typewriter
         coordinator.posHighlight = posHighlight
+        coordinator.bionic = bionic
 
         textView.textDelegate = coordinator
         textView.isHorizontallyResizable = false   // wrap to the view width
@@ -59,12 +61,14 @@ struct TextKitEditor: NSViewRepresentable {
             || coordinator.theme.palette.bg != theme.palette.bg
             || coordinator.focusScope != focusScope
             || coordinator.posHighlight != posHighlight
+            || coordinator.bionic != bionic
         let typewriterChanged = coordinator.typewriter != typewriter
         coordinator.mode = mode
         coordinator.theme = theme
         coordinator.focusScope = focusScope
         coordinator.typewriter = typewriter
         coordinator.posHighlight = posHighlight
+        coordinator.bionic = bionic
         guard let textView = coordinator.textView else { return }
         textView.backgroundColor = theme.palette.bg
         textView.insertionPointColor = theme.palette.accent
@@ -92,10 +96,12 @@ struct TextKitEditor: NSViewRepresentable {
         var focusScope: FocusScope = .off
         var typewriter = false
         var posHighlight = false
+        var bionic = false
         let parser = TreeSitterParser()
         private let styler = Styler()
         private var nodes: [SyntaxNode] = []
         private var posTags: [(NSRange, NSColor)] = []
+        private var bionicRanges: [NSRange] = []
 
         private var lastFocusActive: NSRange?
         private var isRestyling = false
@@ -182,7 +188,21 @@ struct TextKitEditor: NSViewRepresentable {
             let text = textView?.text ?? ""
             nodes = parser.parse(text)
             posTags = posHighlight ? Self.partsOfSpeech(in: text) : []
+            bionicRanges = bionic ? Self.bionicBoldRanges(in: text) : []
             restyle()
+        }
+
+        /// Leading ~45% of each word — the Bionic-reading bold span.
+        static func bionicBoldRanges(in text: String) -> [NSRange] {
+            guard !text.isEmpty else { return [] }
+            var out: [NSRange] = []
+            text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byWords]) { sub, range, _, _ in
+                guard let sub, !sub.isEmpty else { return }
+                let nsRange = NSRange(range, in: text)
+                let bold = max(1, Int((Double(sub.count) * 0.45).rounded()))
+                out.append(NSRange(location: nsRange.location, length: min(bold, nsRange.length)))
+            }
+            return out
         }
 
         /// Words coloured by lexical class (NaturalLanguage). Computed on text/toggle change, cached.
@@ -223,7 +243,8 @@ struct TextKitEditor: NSViewRepresentable {
             let focusActive = focusActiveRange(caret: anchor)
             lastFocusActive = focusActive
             styler.apply(to: textView, nodes: nodes, policy: policy, theme: theme,
-                         revealLocation: caret, focusActive: focusActive, posTags: posTags)
+                         revealLocation: caret, focusActive: focusActive, posTags: posTags,
+                         bionicRanges: bionicRanges)
             if typewriter { centerCaretLine() }
         }
 

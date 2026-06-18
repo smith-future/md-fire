@@ -14,6 +14,7 @@ struct RootView: View {
     @State private var focus: FocusScope = .off
     @State private var typewriter = false
     @State private var posHighlight = false
+    @State private var bionic = false
     @State private var selectedFile: URL?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isDropTargeted = false
@@ -79,6 +80,7 @@ struct RootView: View {
                 focusScope: focus,
                 typewriter: typewriter,
                 posHighlight: posHighlight,
+                bionic: bionic,
                 controller: editor,
                 onChange: { document.userEdited($0) }
             )
@@ -116,18 +118,19 @@ struct RootView: View {
             .pickerStyle(.menu)
             .frame(width: 120)
 
-            Button { typewriter.toggle() } label: { Image(systemName: "keyboard") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(typewriter ? Color(theme.palette.accent) : Color.secondary)
-                .help("Typewriter mode — keep the current line centered")
-
-            Button { posHighlight.toggle() } label: { Image(systemName: "a.square") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(posHighlight ? Color(theme.palette.accent) : Color.secondary)
-                .help("Highlight parts of speech (nouns, verbs, adjectives…)")
-
-            Button { isDark.toggle() } label: { Image(systemName: isDark ? "sun.max" : "moon") }
-                .buttonStyle(.borderless)
+            Menu {
+                Toggle("Typewriter", isOn: $typewriter)
+                Toggle("Bionic reading", isOn: $bionic)
+                Toggle("Parts of speech", isOn: $posHighlight)
+                Divider()
+                Toggle("Dark theme", isOn: $isDark)
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("View options")
 
             Spacer()
 
