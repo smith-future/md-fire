@@ -138,6 +138,12 @@ swift test --package-path Packages/MarkdownCore   # юнит-тесты парс
 
 ---
 
+## Лицензия
+
+[MIT](./LICENSE) © 2026 smitty
+
+---
+
 <div align="center">
 Сделано с 🔥 для тех, кто читает много Markdown.
 </div>
