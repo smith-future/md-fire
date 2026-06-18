@@ -32,6 +32,14 @@ struct MdFireApp: App {
                 Button("Save As…") { document.saveAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
             }
+            CommandGroup(replacing: .importExport) {
+                Button("Export as HTML…") {
+                    HTMLExporter.export(markdown: document.text, title: document.displayName)
+                }
+                Button("Export as PDF…") {
+                    PDFExporter.shared.export(markdown: document.text, title: document.displayName)
+                }
+            }
             CommandMenu("Format") {
                 Button("Bold") { editor.format(.bold) }
                     .keyboardShortcut("b")

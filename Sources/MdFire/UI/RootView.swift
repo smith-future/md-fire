@@ -122,26 +122,28 @@ struct RootView: View {
             Button { isDark.toggle() } label: { Image(systemName: isDark ? "sun.max" : "moon") }
                 .buttonStyle(.borderless)
 
+            Spacer()
+
             Button {
                 TelegramFormatter.copyToPasteboard(from: document.text)
                 telegramCopied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { telegramCopied = false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { telegramCopied = false }
             } label: {
-                Image(systemName: telegramCopied ? "checkmark.circle.fill" : "paperplane")
+                Label(telegramCopied ? "Copied!" : "Telegram",
+                      systemImage: telegramCopied ? "checkmark.circle.fill" : "paperplane.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .fixedSize()
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(telegramCopied ? Color.green : Color.secondary)
-            .help("Copy formatted for Telegram (paste into a chat)")
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(telegramCopied ? Color.green : Color(theme.palette.accent))
+            .help("Copy the document formatted for Telegram, then paste it into a chat")
 
-            Spacer()
-
-            Text(document.displayName + (document.isDirty ? " •" : ""))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-            Text("·").foregroundStyle(.tertiary)
             Text("\(wordCount) words")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
