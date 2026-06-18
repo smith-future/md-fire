@@ -19,6 +19,20 @@ final class WorkspaceModel {
     var tree: [FileNode] = []
 
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "txt"]
+    private let defaultsKey = "md-fire.workspaceRoot"
+
+    init() { restore() }
+
+    /// Re-open the last workspace on launch (sandbox is off, so a plain path suffices; a
+    /// security-scoped bookmark would replace this if the app is ever sandboxed).
+    private func restore() {
+        guard let path = UserDefaults.standard.string(forKey: defaultsKey) else { return }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return }
+        let url = URL(fileURLWithPath: path)
+        root = url
+        tree = Self.buildTree(at: url)
+    }
 
     func openFolder() {
         let panel = NSOpenPanel()
@@ -33,6 +47,7 @@ final class WorkspaceModel {
     func setRoot(_ url: URL) {
         root = url
         tree = Self.buildTree(at: url)
+        UserDefaults.standard.set(url.path, forKey: defaultsKey)
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
     }
 

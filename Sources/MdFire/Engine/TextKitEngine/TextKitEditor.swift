@@ -12,6 +12,7 @@ struct TextKitEditor: NSViewRepresentable {
     var theme: Theme = .light
     var focusScope: FocusScope = .off
     var typewriter: Bool = false
+    var controller: EditorController? = nil
     var onChange: ((String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(mode: mode, theme: theme) }
@@ -43,6 +44,8 @@ struct TextKitEditor: NSViewRepresentable {
         textView.text = text
         coordinator.reparseAndStyle()
         coordinator.observeScroll(scrollView)
+        controller?.revealHandler = { [weak coordinator] range in coordinator?.reveal(range) }
+        controller?.formatHandler = { [weak coordinator] format in coordinator?.applyFormat(format) }
         return scrollView
     }
 
@@ -233,6 +236,39 @@ struct TextKitEditor: NSViewRepresentable {
 
         func configureTypewriter(_ on: Bool) {
             if on { centerCaretLine() }
+        }
+
+        /// Outline jump: place the caret at `range.location` and scroll it near the top of the view.
+        func reveal(_ range: NSRange) {
+            guard let textView else { return }
+            textView.textSelection = NSRange(location: range.location, length: 0)
+            guard let scroll = textView.enclosingScrollView else { return }
+            let layout = textView.textLayoutManager
+            let content = textView.textContentManager
+            guard let loc = content.location(layout.documentRange.location, offsetBy: range.location),
+                  let fragment = layout.textLayoutFragment(for: loc) else { return }
+            let clip = scroll.contentView
+            let targetY = fragment.layoutFragmentFrame.minY - clip.bounds.height * 0.25
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: max(0, targetY)))
+            scroll.reflectScrolledClipView(clip)
+        }
+
+        /// Wrap the selection (or insert an empty pair at the caret) in a Markdown marker.
+        func applyFormat(_ format: InlineFormat) {
+            guard let textView else { return }
+            let selection = textView.textSelection
+            let marker = format.marker
+            let ns = (textView.text ?? "") as NSString
+            guard NSMaxRange(selection) <= ns.length else { return }
+
+            if selection.length > 0 {
+                let selected = ns.substring(with: selection)
+                textView.insertText(marker + selected + marker, replacementRange: selection)
+                textView.textSelection = NSRange(location: selection.location + marker.count, length: selection.length)
+            } else {
+                textView.insertText(marker + marker, replacementRange: selection)
+                textView.textSelection = NSRange(location: selection.location + marker.count, length: 0)
+            }
         }
 
         func textViewDidChangeText(_ notification: Notification) {

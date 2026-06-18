@@ -8,10 +8,11 @@ import SwiftUI
 struct MdFireApp: App {
     @State private var document = MarkdownDocument()
     @State private var workspace = WorkspaceModel()
+    @State private var editor = EditorController()
 
     var body: some Scene {
         WindowGroup {
-            RootView(document: document, workspace: workspace)
+            RootView(document: document, workspace: workspace, editor: editor)
                 .frame(minWidth: 640, minHeight: 480)
         }
         .windowStyle(.hiddenTitleBar)               // UI-DESIGN §4.1: chromeless
@@ -30,6 +31,19 @@ struct MdFireApp: App {
                     .keyboardShortcut("s")
                 Button("Save As…") { document.saveAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+            CommandMenu("Format") {
+                Button("Bold") { editor.format(.bold) }
+                    .keyboardShortcut("b")
+                Button("Italic") { editor.format(.italic) }
+                    .keyboardShortcut("i")
+                Button("Code") { editor.format(.code) }
+                    .keyboardShortcut("e")
+                Button("Strikethrough") { editor.format(.strikethrough) }
+                    .keyboardShortcut("x", modifiers: [.command, .shift])
+                Divider()
+                Button("Copy for Telegram") { TelegramFormatter.copyToPasteboard(from: document.text) }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
             }
         }
     }

@@ -6,6 +6,7 @@ import MarkdownCore
 struct RootView: View {
     let document: MarkdownDocument
     let workspace: WorkspaceModel
+    let editor: EditorController
 
     @State private var mode: RenderMode = .liveWYSIWYG
     @State private var measure = 72
@@ -15,13 +16,19 @@ struct RootView: View {
     @State private var selectedFile: URL?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isDropTargeted = false
+    @State private var telegramCopied = false
 
     private var theme: Theme { isDark ? .dark : .light }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            FileTreeView(workspace: workspace, selection: $selectedFile)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
+            SidebarView(
+                workspace: workspace,
+                selection: $selectedFile,
+                documentText: document.text,
+                onOutlineSelect: { editor.reveal($0) }
+            )
+            .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
         } detail: {
             editorArea
         }
@@ -70,6 +77,7 @@ struct RootView: View {
                 theme: theme,
                 focusScope: focus,
                 typewriter: typewriter,
+                controller: editor,
                 onChange: { document.userEdited($0) }
             )
             .frame(maxWidth: theme.columnWidth(chars: measure))
@@ -113,6 +121,17 @@ struct RootView: View {
 
             Button { isDark.toggle() } label: { Image(systemName: isDark ? "sun.max" : "moon") }
                 .buttonStyle(.borderless)
+
+            Button {
+                TelegramFormatter.copyToPasteboard(from: document.text)
+                telegramCopied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { telegramCopied = false }
+            } label: {
+                Image(systemName: telegramCopied ? "checkmark.circle.fill" : "paperplane")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(telegramCopied ? Color.green : Color.secondary)
+            .help("Copy formatted for Telegram (paste into a chat)")
 
             Spacer()
 
