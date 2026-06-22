@@ -12,6 +12,7 @@ public struct CmarkExportParser {
         public let listItems: Int
         public let codeBlocks: Int
         public let blockQuotes: Int
+        public let tables: Int
     }
 
     public func blockStats(_ source: String) -> BlockStats {
@@ -20,7 +21,8 @@ public struct CmarkExportParser {
             headings: count(doc) { $0 is Heading },
             listItems: count(doc) { $0 is ListItem },
             codeBlocks: count(doc) { $0 is CodeBlock },
-            blockQuotes: count(doc) { $0 is BlockQuote }
+            blockQuotes: count(doc) { $0 is BlockQuote },
+            tables: count(doc) { $0 is Markdown.Table }
         )
     }
 

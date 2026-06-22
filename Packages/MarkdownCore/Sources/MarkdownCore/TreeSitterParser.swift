@@ -30,6 +30,7 @@ public final class TreeSitterParser {
         guard let tree = blockParser.parse(source), let root = tree.rootNode else { return [] }
         var out: [SyntaxNode] = []
         walkBlock(root, nsSource: nsSource, into: &out)
+        appendWikiLinks(nsSource: nsSource, into: &out)
         return out
     }
 
@@ -78,8 +79,12 @@ public final class TreeSitterParser {
         case "block_quote":
             let kids = children(node)
             let markers = kids.filter { $0.nodeType == "block_quote_marker" }.map { range($0) }
-            out.append(SyntaxNode(role: .blockQuote, nodeRange: range(node),
-                                  contentRange: range(node), markerRanges: markers))
+            let bqRange = range(node)
+            // GFM callout: a block quote whose first line is `[!KIND]` becomes a `.callout(kind:)`.
+            let role: SyntaxNode.Role = Self.calloutKind(nsSource.substring(with: bqRange))
+                .map { .callout(kind: $0) } ?? .blockQuote
+            out.append(SyntaxNode(role: role, nodeRange: bqRange,
+                                  contentRange: bqRange, markerRanges: markers))
             for c in kids { walkBlock(c, nsSource: nsSource, into: &out) }
 
         case "list_item":
@@ -87,6 +92,20 @@ public final class TreeSitterParser {
 
         case "fenced_code_block":
             emitFencedCode(node, nsSource: nsSource, into: &out)
+
+        case "pipe_table":
+            // The whole table as one node; markers stay empty so the editor shows readable source
+            // (rich rendering happens in the WebView preview pane). Cell contents still get inline
+            // styling (bold/code inside a cell) via the inline pass.
+            out.append(SyntaxNode(role: .table, nodeRange: range(node),
+                                  contentRange: range(node), markerRanges: []))
+            emitTableCells(node, nsSource: nsSource, into: &out)
+
+        case "minus_metadata", "plus_metadata":
+            // YAML (`---`) / TOML (`+++`) frontmatter. Kept verbatim in the editor; excluded from the
+            // inline pass so its `:`/`-` aren't mis-styled.
+            out.append(SyntaxNode(role: .frontmatter, nodeRange: range(node),
+                                  contentRange: range(node), markerRanges: []))
 
         case "thematic_break":
             let r = range(node)
@@ -99,13 +118,36 @@ public final class TreeSitterParser {
         }
     }
 
+    private func emitTableCells(_ node: Node, nsSource: NSString, into out: inout [SyntaxNode]) {
+        for c in children(node) {
+            if c.nodeType == "pipe_table_cell" {
+                parseInline(c, nsSource: nsSource, into: &out)
+            } else {
+                emitTableCells(c, nsSource: nsSource, into: &out)
+            }
+        }
+    }
+
+    /// Matches a GFM callout label on the first line of a block quote (`> [!NOTE]`), returning the
+    /// uppercased kind. No tree-sitter node exists for callouts, so we detect by text.
+    private static let calloutRegex = try! NSRegularExpression(
+        pattern: "^\\s*>?\\s*\\[!([A-Za-z]+)\\]", options: [])
+    static func calloutKind(_ blockQuoteText: String) -> String? {
+        let ns = blockQuoteText as NSString
+        guard let m = calloutRegex.firstMatch(in: blockQuoteText, range: NSRange(location: 0, length: ns.length)),
+              m.numberOfRanges > 1 else { return nil }
+        return ns.substring(with: m.range(at: 1)).uppercased()
+    }
+
     private func emitListItem(_ node: Node, nsSource: NSString, into out: inout [SyntaxNode]) {
         let kids = children(node)
         let listMarkers = kids.filter { ($0.nodeType ?? "").hasPrefix("list_marker_") }
         let unchecked = kids.first { $0.nodeType == "task_list_marker_unchecked" }
         let checked = kids.first { $0.nodeType == "task_list_marker_checked" }
-        var markers = listMarkers.map { range($0) }
-        if let task = checked ?? unchecked { markers.append(range(task)) }
+        // The `- ` bullet stays a (hidden/dim) marker; the `[ ]`/`[x]` checkbox does NOT — F2 keeps it
+        // visible and clickable, so it travels in `checkboxRange`, not `markerRanges`.
+        let markers = listMarkers.map { range($0) }
+        let checkboxRange = (checked ?? unchecked).map { range($0) }
         let ordered = listMarkers.contains {
             $0.nodeType == "list_marker_dot" || $0.nodeType == "list_marker_parenthesis"
         }
@@ -114,7 +156,8 @@ public final class TreeSitterParser {
         else if unchecked != nil { role = .taskItem(checked: false) }
         else { role = .listItem(ordered: ordered) }
         out.append(SyntaxNode(role: role, nodeRange: range(node),
-                              contentRange: range(node), markerRanges: markers))
+                              contentRange: range(node), markerRanges: markers,
+                              checkboxRange: checkboxRange))
         for c in kids { walkBlock(c, nsSource: nsSource, into: &out) }
     }
 
@@ -141,10 +184,10 @@ public final class TreeSitterParser {
         guard docRange.length > 0, NSMaxRange(docRange) <= nsSource.length else { return }
         let sub = nsSource.substring(with: docRange)
         guard let tree = inlineParser.parse(sub), let root = tree.rootNode else { return }
-        walkInline(root, docOffset: docRange.location, into: &out)
+        walkInline(root, docOffset: docRange.location, nsSource: nsSource, into: &out)
     }
 
-    private func walkInline(_ node: Node, docOffset: Int, into out: inout [SyntaxNode]) {
+    private func walkInline(_ node: Node, docOffset: Int, nsSource: NSString, into out: inout [SyntaxNode]) {
         let type = node.nodeType ?? ""
         switch type {
         case "emphasis", "strong_emphasis", "strikethrough":
@@ -167,8 +210,8 @@ public final class TreeSitterParser {
                 contentRange: contentRange,
                 markerRanges: delims.map { shifted($0, by: docOffset) }
             ))
-            for c in kids where ["emphasis", "strong_emphasis", "strikethrough", "code_span", "inline_link"].contains(c.nodeType ?? "") {
-                walkInline(c, docOffset: docOffset, into: &out)
+            for c in kids where ["emphasis", "strong_emphasis", "strikethrough", "code_span", "inline_link", "image", "uri_autolink", "email_autolink"].contains(c.nodeType ?? "") {
+                walkInline(c, docOffset: docOffset, nsSource: nsSource, into: &out)
             }
 
         case "code_span":
@@ -183,19 +226,100 @@ public final class TreeSitterParser {
             ))
 
         case "inline_link":
-            let textNode = children(node).first { $0.nodeType == "link_text" }
+            emitLinkLike(node, docOffset: docOffset, nsSource: nsSource,
+                         role: .link, textType: "link_text", into: &out)
+
+        case "image":
+            emitLinkLike(node, docOffset: docOffset, nsSource: nsSource,
+                         role: .image, textType: "image_description", into: &out)
+
+        case "uri_autolink", "email_autolink":
+            // The whole node is `<url>`; strip the angle brackets for content + destination.
             let full = shifted(node, by: docOffset)
-            let content = textNode.map { shifted($0, by: docOffset) } ?? full
+            var content = full
             var markers: [NSRange] = []
-            let leftLen = content.location - full.location
-            if leftLen > 0 { markers.append(NSRange(location: full.location, length: leftLen)) }
-            let rightStart = content.location + content.length
-            let rightLen = (full.location + full.length) - rightStart
-            if rightLen > 0 { markers.append(NSRange(location: rightStart, length: rightLen)) }
-            out.append(SyntaxNode(role: .link, nodeRange: full, contentRange: content, markerRanges: markers))
+            if full.length >= 2 {
+                markers.append(NSRange(location: full.location, length: 1))
+                markers.append(NSRange(location: NSMaxRange(full) - 1, length: 1))
+                content = NSRange(location: full.location + 1, length: full.length - 2)
+            }
+            out.append(SyntaxNode(role: .autolink, nodeRange: full, contentRange: content,
+                                  markerRanges: markers, linkDestination: nsSource.substring(with: content)))
+
+        case "latex_block":
+            let delims = children(node).filter { $0.nodeType == "latex_span_delimiter" }.sorted { loc($0) < loc($1) }
+            let display = delims.first.map { end($0) - loc($0) >= 2 } ?? false
+            let s = delims.first.map { docOffset + end($0) } ?? (docOffset + loc(node))
+            let e = delims.last.map { docOffset + loc($0) } ?? (docOffset + end(node))
+            out.append(SyntaxNode(
+                role: .math(display: display),
+                nodeRange: shifted(node, by: docOffset),
+                contentRange: NSRange(location: s, length: max(0, e - s)),
+                markerRanges: delims.map { shifted($0, by: docOffset) }
+            ))
 
         default:
-            for c in children(node) { walkInline(c, docOffset: docOffset, into: &out) }
+            for c in children(node) { walkInline(c, docOffset: docOffset, nsSource: nsSource, into: &out) }
+        }
+    }
+
+    /// Shared emitter for `[text](dest)` links and `![alt](dest)` images: derives the surrounding
+    /// marker runs from the gap between the full node and its text child, and reads `link_destination`.
+    private func emitLinkLike(_ node: Node, docOffset: Int, nsSource: NSString,
+                              role: SyntaxNode.Role, textType: String, into out: inout [SyntaxNode]) {
+        let kids = children(node)
+        let textNode = kids.first { $0.nodeType == textType }
+        let destNode = kids.first { $0.nodeType == "link_destination" }
+        let full = shifted(node, by: docOffset)
+        let content = textNode.map { shifted($0, by: docOffset) } ?? full
+        var markers: [NSRange] = []
+        let leftLen = content.location - full.location
+        if leftLen > 0 { markers.append(NSRange(location: full.location, length: leftLen)) }
+        let rightStart = NSMaxRange(content)
+        let rightLen = NSMaxRange(full) - rightStart
+        if rightLen > 0 { markers.append(NSRange(location: rightStart, length: rightLen)) }
+        let dest = destNode.map { nsSource.substring(with: shifted($0, by: docOffset)) }
+        out.append(SyntaxNode(role: role, nodeRange: full, contentRange: content,
+                              markerRanges: markers, linkDestination: dest))
+    }
+
+    // MARK: - Wiki-link fallback
+
+    /// `[[Page]]` / `[[Page|Alias]]`. The shipped grammar has `EXTENSION_WIKI_LINK` off (it parses
+    /// `[[…]]` as stray brackets + a shortcut link), so we detect them with a post-pass over the
+    /// source, skipping any span already inside a code span / code block.
+    private static let wikiRegex = try! NSRegularExpression(
+        pattern: "\\[\\[([^\\[\\]\\n]+)\\]\\]", options: [])
+    private func appendWikiLinks(nsSource: NSString, into out: inout [SyntaxNode]) {
+        let codeRanges = out.compactMap { node -> NSRange? in
+            switch node.role { case .codeSpan, .codeBlock: return node.nodeRange; default: return nil }
+        }
+        let full = NSRange(location: 0, length: nsSource.length)
+        for m in Self.wikiRegex.matches(in: nsSource as String, range: full) {
+            let whole = m.range
+            if codeRanges.contains(where: { NSIntersectionRange($0, whole).length > 0 }) { continue }
+            let inner = m.range(at: 1)
+            let innerStr = nsSource.substring(with: inner)
+            // `[[Page|Alias]]` → destination "Page", display "Alias".
+            let pipe = (innerStr as NSString).range(of: "|")
+            let target: String
+            let displayRange: NSRange
+            if pipe.location != NSNotFound {
+                target = (innerStr as NSString).substring(to: pipe.location)
+                displayRange = NSRange(location: inner.location + pipe.location + 1,
+                                       length: inner.length - pipe.location - 1)
+            } else {
+                target = innerStr
+                displayRange = inner
+            }
+            var markers = [NSRange(location: whole.location, length: 2),                       // [[
+                           NSRange(location: NSMaxRange(whole) - 2, length: 2)]                 // ]]
+            if pipe.location != NSNotFound {                                                    // Page|
+                markers.append(NSRange(location: inner.location, length: pipe.location + 1))
+            }
+            out.append(SyntaxNode(role: .link, nodeRange: whole, contentRange: displayRange,
+                                  markerRanges: markers,
+                                  linkDestination: target.trimmingCharacters(in: .whitespaces)))
         }
     }
 }
