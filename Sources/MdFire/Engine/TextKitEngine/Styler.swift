@@ -11,7 +11,8 @@ struct Styler {
     /// bright Focus-Mode range — everything outside it is dimmed.
     func apply(to textView: STTextView, nodes: [SyntaxNode], policy: StylePolicy, theme: Theme,
                revealLocation: Int? = nil, focusActive: NSRange? = nil,
-               posTags: [(NSRange, NSColor)] = [], bionicRanges: [NSRange] = []) {
+               posTags: [(NSRange, NSColor)] = [], bionicRanges: [NSRange] = [],
+               changedRanges: [NSRange] = [], changeAlpha: CGFloat = 0) {
         let nsLen = (textView.text as NSString?)?.length ?? 0
         guard nsLen > 0 else { return }
         let full = NSRange(location: 0, length: nsLen)
@@ -29,6 +30,29 @@ struct Styler {
             if !content.isEmpty, isValid(node.contentRange, nsLen) {
                 textView.addAttributes(content, range: node.contentRange)
             }
+
+            // F2: make the `[ ]` / `[x]` checkbox a clickable link (STTextView adds a pointing-hand
+            // cursor for `.link` and won't recolor it, so the glyph keeps the color we set here).
+            if case .taskItem(let checked) = node.role, let cb = node.checkboxRange, isValid(cb, nsLen) {
+                textView.addAttributes([
+                    .foregroundColor: checked ? theme.palette.accent : theme.palette.marker,
+                    .underlineStyle: 0,
+                ], range: cb)
+                // Extend the clickable link to the space after the checkbox for a forgiving hit target.
+                let clickable = NSRange(location: cb.location, length: min(cb.length + 1, nsLen - cb.location))
+                textView.addAttributes([.link: URL(string: "mdfire://toggle")!], range: clickable)
+            }
+
+            // F4: real/relative/wiki links are clickable (scheme-dispatched in the click handler).
+            if case .link = node.role, let dest = node.linkDestination,
+               isValid(node.contentRange, nsLen), let url = Self.linkURL(for: dest) {
+                textView.addAttributes([.link: url], range: node.contentRange)
+            }
+            if case .autolink = node.role, let dest = node.linkDestination,
+               isValid(node.contentRange, nsLen), let url = URL(string: dest) {
+                textView.addAttributes([.link: url], range: node.contentRange)
+            }
+
             guard !node.markerRanges.isEmpty else { continue }
             let revealed = policy.revealsAtCaret
                 && revealLocation.map { caretInside($0, node.nodeRange) } == true
@@ -60,6 +84,15 @@ struct Styler {
         // a soft glow falloff rather than a hard bright/dim edge.
         if let active = focusActive {
             applyFocusGlow(textView, active: active, nsLen: nsLen, theme: theme)
+        }
+
+        // F1 change highlight: tint the lines an external reload just rewrote. Applied LAST so it
+        // wins over content/focus backgrounds. `changeAlpha` decays 1→0 so the tint fades out.
+        if changeAlpha > 0, !changedRanges.isEmpty {
+            let tint = theme.palette.changeTint.withAlphaComponent(changeAlpha)
+            for range in changedRanges where isValid(range, nsLen) {
+                textView.addAttributes([.backgroundColor: tint], range: range)
+            }
         }
     }
 
@@ -127,5 +160,21 @@ struct Styler {
 
     private func isValid(_ r: NSRange, _ length: Int) -> Bool {
         r.location != NSNotFound && r.location >= 0 && r.length >= 0 && r.location + r.length <= length
+    }
+
+    /// Maps a markdown link destination to a `.link` URL: external schemes open in the browser;
+    /// relative paths / `[[wiki]]` targets become `mdfire://open?path=…` for in-app navigation (F4).
+    static func linkURL(for destination: String) -> URL? {
+        let dest = destination.trimmingCharacters(in: .whitespaces)
+        guard !dest.isEmpty else { return nil }
+        if dest.hasPrefix("http://") || dest.hasPrefix("https://") || dest.hasPrefix("mailto:") {
+            return URL(string: dest)
+        }
+        if dest.hasPrefix("#") { return nil }   // intra-document anchors: no navigation yet
+        var comps = URLComponents()
+        comps.scheme = "mdfire"
+        comps.host = "open"
+        comps.queryItems = [URLQueryItem(name: "path", value: dest)]
+        return comps.url
     }
 }

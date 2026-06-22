@@ -36,13 +36,15 @@ public extension StylePolicy {
         case .codeSpan, .codeBlock:
             return [.font: theme.font(size: theme.baseSize * 0.95),
                     .backgroundColor: theme.palette.codeBg]
-        case .link:
+        case .link, .autolink:
             return [.foregroundColor: theme.palette.accent,
                     .underlineStyle: NSUnderlineStyle.single.rawValue]
-        case .blockQuote:
+        case .image, .frontmatter:
+            return [.foregroundColor: theme.palette.dimmed]
+        case .blockQuote, .callout:
             return [.foregroundColor: theme.palette.dimmed,
                     .font: theme.font(size: theme.baseSize, italic: true)]
-        case .paragraph, .listItem, .taskItem, .text, .thematicBreak:
+        case .paragraph, .listItem, .taskItem, .text, .thematicBreak, .table, .math:
             return [:]
         }
     }

@@ -5,9 +5,9 @@ import Markdown
 /// Used by both HTML export and (loaded in a WKWebView) PDF export. Walks swift-markdown's AST so
 /// the output is conformant GFM.
 enum HTMLRenderer {
+    /// Static, self-contained themed HTML — used for HTML/PDF export (no JavaScript).
     static func standaloneHTML(from markdown: String, title: String, dark: Bool) -> String {
-        let body = html(for: Document(parsing: markdown))
-        return """
+        """
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -18,8 +18,77 @@ enum HTMLRenderer {
         </head>
         <body>
         <article>
-        \(body)
+        \(articleBody(from: markdown))
         </article>
+        </body>
+        </html>
+        """
+    }
+
+    /// Frontmatter block (if present) + rendered body — shared by export and the live preview.
+    static func articleBody(from markdown: String) -> String {
+        let (frontmatter, body) = splitFrontmatter(markdown)
+        let fmHTML = frontmatter.map { "<div class=\"frontmatter\"><pre>\(escape($0))</pre></div>\n" } ?? ""
+        return fmHTML + html(for: Document(parsing: body))
+    }
+
+    /// Live preview page (F3): the same body plus highlight.js / Mermaid / KaTeX from CDN and a
+    /// `__setBody` hook for flicker-free incremental updates. Renders beautifully online; degrades
+    /// gracefully offline (code shows unhighlighted, diagrams as source, math as raw `$…$`). Updates
+    /// parse into a detached document and move nodes in (no innerHTML, scripts never execute).
+    static func richHTML(from markdown: String, title: String, dark: Bool) -> String {
+        let hlTheme = dark ? "github-dark" : "github"
+        return """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>\(escape(title))</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/\(hlTheme).min.css">
+        <style>\(css(dark: dark))</style>
+        <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+        <script>
+          function __render() {
+            try { if (window.hljs) document.querySelectorAll('pre code').forEach(function(e){ hljs.highlightElement(e); }); } catch (e) {}
+            try { if (window.mermaid) { mermaid.initialize({ startOnLoad: false, theme: '\(dark ? "dark" : "default")' }); mermaid.run({ querySelector: '.mermaid' }); } } catch (e) {}
+            try { if (window.renderMathInElement) renderMathInElement(document.body, { delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}], throwOnError: false }); } catch (e) {}
+          }
+          // Parse into a detached document (scripts never run) and move the nodes in — no innerHTML.
+          window.__setBody = function(html) {
+            var article = document.getElementById('article');
+            if (!article) return;
+            var parsed = new DOMParser().parseFromString(html, 'text/html');
+            article.replaceChildren.apply(article, Array.prototype.slice.call(parsed.body.childNodes));
+            __render();
+          };
+          // Interactive task checkboxes: a change posts the checkbox's index (DOM order == file order)
+          // to the app, which toggles the matching `[ ]`/`[x]` in the document and re-renders.
+          document.addEventListener('change', function(e) {
+            var t = e.target;
+            if (t && t.classList && t.classList.contains('mdtask') &&
+                window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mdtask) {
+              var boxes = Array.prototype.slice.call(document.querySelectorAll('input.mdtask'));
+              var idx = boxes.indexOf(t);
+              if (idx >= 0) window.webkit.messageHandlers.mdtask.postMessage(idx);
+            }
+          });
+          // Outline navigation: scroll to the heading whose text matches (first match wins).
+          window.__scrollToHeading = function(text) {
+            var hs = document.querySelectorAll('h1,h2,h3,h4,h5,h6');
+            for (var i = 0; i < hs.length; i++) {
+              if (hs[i].textContent.trim() === text) { hs[i].scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+            }
+          };
+          window.addEventListener('load', __render);
+        </script>
+        </head>
+        <body>
+        <article id="article">\(articleBody(from: markdown))</article>
         </body>
         </html>
         """
@@ -46,8 +115,25 @@ enum HTMLRenderer {
         case let node as InlineCode:
             return "<code>\(escape(node.code))</code>"
         case let node as CodeBlock:
+            // Mermaid fences become a <pre class="mermaid"> the JS renders into a diagram; everything
+            // else is <pre><code class="language-…"> ready for highlight.js.
+            if node.language?.lowercased() == "mermaid" {
+                return "<pre class=\"mermaid\">\(escape(node.code))</pre>\n"
+            }
             let lang = node.language.map { " class=\"language-\(escape($0))\"" } ?? ""
             return "<pre><code\(lang)>\(escape(node.code))</code></pre>\n"
+        case let node as Markdown.Table:
+            return "<table>\(children(node))</table>\n"
+        case let node as Markdown.Table.Head:
+            let cells = node.children.map { "<th>\(children($0))</th>" }.joined()
+            return "<thead><tr>\(cells)</tr></thead>\n"
+        case let node as Markdown.Table.Body:
+            return "<tbody>\(children(node))</tbody>\n"
+        case let node as Markdown.Table.Row:
+            let cells = node.children.map { "<td>\(children($0))</td>" }.joined()
+            return "<tr>\(cells)</tr>\n"
+        case let node as Markdown.Table.Cell:
+            return children(node)
         case let node as Link:
             return "<a href=\"\(escape(node.destination ?? ""))\">\(children(node))</a>"
         case let node as Image:
@@ -57,14 +143,20 @@ enum HTMLRenderer {
         case let node as OrderedList:
             return "<ol>\n\(children(node))</ol>\n"
         case let node as ListItem:
+            // `mdtask` checkboxes are interactive in the live preview (a change posts the task index to
+            // the app, which toggles it in the file). Export still produces a static checkbox.
             let box: String
             switch node.checkbox {
-            case .checked: box = "<input type=\"checkbox\" checked disabled> "
-            case .unchecked: box = "<input type=\"checkbox\" disabled> "
+            case .checked: box = "<input type=\"checkbox\" class=\"mdtask\" checked> "
+            case .unchecked: box = "<input type=\"checkbox\" class=\"mdtask\"> "
             case nil: box = ""
             }
             return "<li>\(box)\(children(node))</li>\n"
         case let node as BlockQuote:
+            // GFM callout `> [!NOTE]` → styled admonition; otherwise a plain blockquote.
+            if let kind = calloutKind(node) {
+                return calloutHTML(node, kind: kind)
+            }
             return "<blockquote>\n\(children(node))</blockquote>\n"
         case is ThematicBreak:
             return "<hr>\n"
@@ -73,12 +165,93 @@ enum HTMLRenderer {
         case is LineBreak:
             return "<br>\n"
         case let node as InlineHTML:
-            return node.rawHTML
+            return sanitizeRawHTML(node.rawHTML)
         case let node as HTMLBlock:
-            return node.rawHTML
+            return sanitizeRawHTML(node.rawHTML)
         default:
             return children(markup)
         }
+    }
+
+    // MARK: - Callouts
+
+    private static let calloutRegex = try! NSRegularExpression(pattern: "^\\s*\\[!([A-Za-z]+)\\]", options: [])
+
+    private static func calloutKind(_ node: BlockQuote) -> String? {
+        guard let para = node.children.compactMap({ $0 as? Paragraph }).first else { return nil }
+        let text = para.plainText as NSString
+        guard let m = calloutRegex.firstMatch(in: para.plainText, range: NSRange(location: 0, length: text.length)),
+              m.numberOfRanges > 1 else { return nil }
+        return text.substring(with: m.range(at: 1)).uppercased()
+    }
+
+    private static func calloutHTML(_ node: BlockQuote, kind: String) -> String {
+        var inner = ""
+        for (i, child) in node.children.enumerated() {
+            if i == 0, let para = child as? Paragraph {
+                let body = calloutFirstParagraph(para)
+                if !body.isEmpty { inner += "<p>\(body)</p>\n" }
+            } else {
+                inner += html(for: child)
+            }
+        }
+        let title = kind.prefix(1) + kind.dropFirst().lowercased()
+        return "<div class=\"callout callout-\(kind.lowercased())\">"
+            + "<p class=\"callout-title\">\(escape(String(title)))</p>\(inner)</div>\n"
+    }
+
+    /// Renders a callout's first paragraph with the leading `[!KIND]` marker stripped.
+    private static func calloutFirstParagraph(_ para: Paragraph) -> String {
+        var out = ""
+        var strippedMarker = false
+        for child in para.children {
+            if !strippedMarker, let text = child as? Text {
+                let cleaned = text.string.replacingOccurrences(
+                    of: "^\\s*\\[![A-Za-z]+\\]\\s*", with: "", options: .regularExpression)
+                out += escape(cleaned)
+                strippedMarker = true
+            } else if !strippedMarker, child is SoftBreak || child is LineBreak {
+                continue   // drop the break that followed a marker on its own line
+            } else {
+                out += html(for: child)
+                strippedMarker = true
+            }
+        }
+        return out.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Strips active content from agent-authored raw HTML before it enters the JS-running preview:
+    /// `<script>` (DOMParser already won't execute these, but be explicit), embedding tags that can
+    /// load remote/active content, inline `on*=` event handlers (which DO fire on inserted nodes,
+    /// e.g. `<img onerror>`), and `javascript:` URIs.
+    private static func sanitizeRawHTML(_ raw: String) -> String {
+        var s = raw
+        let patterns = [
+            "(?is)<script.*?>.*?</script>",
+            "(?is)<script[^>]*/?>",
+            "(?is)</?(?:iframe|object|embed|link|meta|base)[^>]*>",
+            "(?i)\\son\\w+\\s*=\\s*\"[^\"]*\"",
+            "(?i)\\son\\w+\\s*=\\s*'[^']*'",
+            "(?i)\\son\\w+\\s*=\\s*[^\\s>]+",
+            "(?i)javascript:",
+        ]
+        for pattern in patterns {
+            s = s.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        return s
+    }
+
+    /// Splits leading YAML (`---`) / TOML (`+++`) frontmatter from the body.
+    static func splitFrontmatter(_ md: String) -> (frontmatter: String?, body: String) {
+        for fence in ["---", "+++"] {
+            guard md.hasPrefix(fence) else { continue }
+            let lines = md.components(separatedBy: "\n")
+            guard lines.first == fence, let close = lines.dropFirst().firstIndex(of: fence) else { continue }
+            let fm = lines[1..<close].joined(separator: "\n")
+            let body = lines[(close + 1)...].joined(separator: "\n")
+            return (fm, body)
+        }
+        return (nil, md)
     }
 
     private static func children(_ markup: Markup) -> String {
@@ -136,8 +309,22 @@ enum HTMLRenderer {
         li input[type=checkbox] { margin-right: 0.4em; }
         hr { border: none; border-top: 1px solid \(border); margin: 2em 0; }
         img { max-width: 100%; }
-        table { border-collapse: collapse; margin: 1em 0; }
-        th, td { border: 1px solid \(border); padding: 6px 10px; }
+        table { border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+        th, td { border: 1px solid \(border); padding: 6px 10px; text-align: left; }
+        th { background: \(codeBg); font-weight: 700; }
+        tbody tr:nth-child(even) { background: \(dark ? "#202020" : "#FAFAFA"); }
+        .frontmatter { margin: 0 0 1.6em; padding: 10px 14px; border-radius: 8px;
+                       background: \(codeBg); border: 1px solid \(border); }
+        .frontmatter pre { margin: 0; background: none; padding: 0; font-size: 0.85em; color: \(dim); }
+        .callout { margin: 1em 0; padding: 10px 14px 2px; border-radius: 8px; border: 1px solid \(border);
+                   border-left: 4px solid \(accent); background: \(codeBg); }
+        .callout-title { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+                         font-size: 0.8em; margin: 0 0 0.4em; color: \(accent); }
+        .callout-warning, .callout-caution { border-left-color: #E8A33D; } .callout-warning .callout-title, .callout-caution .callout-title { color: #E8A33D; }
+        .callout-tip, .callout-success { border-left-color: #4F9A4F; } .callout-tip .callout-title, .callout-success .callout-title { color: #4F9A4F; }
+        .callout-important, .callout-danger { border-left-color: #C8402F; } .callout-important .callout-title, .callout-danger .callout-title { color: #C8402F; }
+        .mermaid { background: \(dark ? "#202020" : "#FFFFFF"); border-radius: 8px; padding: 12px; text-align: center; }
+        .katex { font-size: 1.05em; }
         @media print { body { background: #fff; } article { padding: 0; max-width: none; } }
         """
     }

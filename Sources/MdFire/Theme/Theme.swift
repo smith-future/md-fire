@@ -12,6 +12,8 @@ public struct Theme {
         public let accent: NSColor
         public let codeBg: NSColor
         public let selection: NSColor
+        /// F1: background tint for lines an external reload just changed (decays after a reload).
+        public let changeTint: NSColor
     }
 
     public let palette: Palette
@@ -58,7 +60,8 @@ public struct Theme {
             marker: NSColor(rgb: 0xB0B0AE),
             accent: NSColor(rgb: 0x15BDEC),
             codeBg: NSColor(rgb: 0xEFEFEF),
-            selection: NSColor(rgb: 0xCEE7F3)
+            selection: NSColor(rgb: 0xCEE7F3),
+            changeTint: NSColor(rgb: 0x8FE3A6)   // soft green — "the agent just wrote this"
         ),
         baseSize: 17,
         lineHeightMultiple: 1.5
@@ -72,7 +75,8 @@ public struct Theme {
             marker: NSColor(rgb: 0x5E5E5E),
             accent: NSColor(rgb: 0x15BDEC),
             codeBg: NSColor(rgb: 0x242424),
-            selection: NSColor(rgb: 0x29434E)
+            selection: NSColor(rgb: 0x29434E),
+            changeTint: NSColor(rgb: 0x2F5A3C)   // soft green — "the agent just wrote this"
         ),
         baseSize: 17,
         lineHeightMultiple: 1.5

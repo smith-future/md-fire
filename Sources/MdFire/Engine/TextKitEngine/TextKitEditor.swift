@@ -18,6 +18,13 @@ struct TextKitEditor: NSViewRepresentable {
     var reduceMotion: Bool = false
     var controller: EditorController? = nil
     var onChange: ((String) -> Void)? = nil
+    var onCheckboxToggle: (() -> Void)? = nil
+    var onFollowLink: ((String) -> Void)? = nil
+    var onActivated: (() -> Void)? = nil
+    /// F1: line ranges the last external reload changed (already gated by Show-changes upstream).
+    var changedRanges: [NSRange] = []
+    /// F1: bumped by the document on each external reload, so we reload in place vs hard-reset.
+    var reloadGeneration: Int = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(mode: mode, theme: theme) }
 
@@ -28,6 +35,9 @@ struct TextKitEditor: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.textView = textView
         coordinator.onChange = onChange
+        coordinator.onCheckboxToggle = onCheckboxToggle
+        coordinator.onFollowLink = onFollowLink
+        coordinator.onActivated = onActivated
         coordinator.focusScope = focusScope
         coordinator.typewriter = typewriter
         coordinator.posHighlight = posHighlight
@@ -59,6 +69,9 @@ struct TextKitEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onChange = onChange
+        coordinator.onCheckboxToggle = onCheckboxToggle
+        coordinator.onFollowLink = onFollowLink
+        coordinator.onActivated = onActivated
         let appearanceChanged = coordinator.mode != mode
             || coordinator.theme.palette.bg != theme.palette.bg
             || coordinator.focusScope != focusScope
@@ -80,11 +93,18 @@ struct TextKitEditor: NSViewRepresentable {
         if typewriterChanged { coordinator.configureTypewriter(typewriter) }
 
         if textView.text != text {
-            // External change (file opened / new doc) — sync the view and re-parse.
-            coordinator.isProgrammatic = true
-            textView.text = text
-            coordinator.isProgrammatic = false
-            coordinator.reparseAndStyle()
+            if reloadGeneration != coordinator.lastReloadGeneration {
+                // F1: an agent rewrote the file on disk — reload in place (keep the viewport) and
+                // tint the changed lines.
+                coordinator.lastReloadGeneration = reloadGeneration
+                coordinator.reloadPreservingViewport(newText: text, changedRanges: changedRanges)
+            } else {
+                // A different document was opened (sidebar / ⌘O / New) — hard reset to the top.
+                coordinator.isProgrammatic = true
+                textView.text = text
+                coordinator.isProgrammatic = false
+                coordinator.reparseAndStyle()
+            }
         } else if appearanceChanged || typewriterChanged {
             coordinator.reparseAndStyle()   // mode / theme / focus / typewriter toggled
         }
@@ -96,6 +116,9 @@ struct TextKitEditor: NSViewRepresentable {
         var theme: Theme
         var isProgrammatic = false
         var onChange: ((String) -> Void)?
+        var onCheckboxToggle: (() -> Void)?        // F2: persist a checkbox tick to disk
+        var onFollowLink: ((String) -> Void)?      // F4: resolve + open an internal link destination
+        var onActivated: (() -> Void)?             // F5: mark this pane active (focused) for menu routing
         var focusScope: FocusScope = .off
         var typewriter = false
         var posHighlight = false
@@ -106,6 +129,12 @@ struct TextKitEditor: NSViewRepresentable {
         private var nodes: [SyntaxNode] = []
         private var posTags: [(NSRange, NSColor)] = []
         private var bionicRanges: [NSRange] = []
+
+        // F1: transient change-highlight state.
+        var lastReloadGeneration = 0
+        private var changedRanges: [NSRange] = []
+        private var changeAlpha: CGFloat = 0
+        private var changeDecayWork: DispatchWorkItem?
 
         private var lastFocusActive: NSRange?
         private var isRestyling = false
@@ -254,8 +283,69 @@ struct TextKitEditor: NSViewRepresentable {
             lastFocusActive = focusActive
             styler.apply(to: textView, nodes: nodes, policy: policy, theme: theme,
                          revealLocation: caret, focusActive: focusActive, posTags: posTags,
-                         bionicRanges: bionicRanges)
+                         bionicRanges: bionicRanges, changedRanges: changedRanges, changeAlpha: changeAlpha)
             if typewriter { centerCaretLine() }
+        }
+
+        // MARK: - F1 live reload (preserve viewport) + change-tint decay
+
+        /// Swap in externally-changed text WITHOUT the hard reset that jumps the scroll to the top:
+        /// capture scroll origin + selection, set the text, reparse/restyle, then restore them. Starts
+        /// the change-tint decay over `changedRanges`.
+        func reloadPreservingViewport(newText: String, changedRanges: [NSRange]) {
+            guard let textView else { return }
+            let scroll = textView.enclosingScrollView
+            let savedOrigin = scroll?.contentView.bounds.origin
+            let savedSelection = textView.textSelection
+            // Set the highlight state BEFORE the text swap so the single (explicit) reparseAndStyle
+            // already tints; textViewDidChangeText skips its own reparse while isProgrammatic.
+            self.changedRanges = changedRanges
+            self.changeAlpha = changedRanges.isEmpty ? 0 : 1
+            isProgrammatic = true
+            textView.text = newText
+            isProgrammatic = false
+            reparseAndStyle()
+            if let scroll, let origin = savedOrigin {
+                scroll.contentView.scroll(to: origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            let len = (newText as NSString).length
+            if NSMaxRange(savedSelection) <= len { textView.textSelection = savedSelection }
+            startChangeDecay()
+        }
+
+        /// Hold the tint at full strength briefly, then fade it out in small steps (snapping under
+        /// Reduce Motion). Mirrors the status-bar fade-on-idle pattern.
+        private func startChangeDecay() {
+            changeDecayWork?.cancel()
+            guard !changedRanges.isEmpty else { changeAlpha = 0; return }
+            changeAlpha = 1
+            restyle()
+            if reduceMotion {
+                let work = DispatchWorkItem { [weak self] in self?.clearChangeHighlight() }
+                changeDecayWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
+                return
+            }
+            let steps = 10
+            func fade(_ i: Int) {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    if i > steps { self.clearChangeHighlight(); return }
+                    self.changeAlpha = 1 - CGFloat(i) / CGFloat(steps)
+                    self.restyle()
+                    fade(i + 1)
+                }
+                changeDecayWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + (i == 0 ? 0.8 : 0.13), execute: work)
+            }
+            fade(0)
+        }
+
+        private func clearChangeHighlight() {
+            changedRanges = []
+            changeAlpha = 0
+            restyle()
         }
 
         /// Focus range for the caret. `.line` uses the actual TextKit 2 visual line; the rest comes
@@ -317,13 +407,17 @@ struct TextKitEditor: NSViewRepresentable {
         }
 
         /// Outline jump: place the caret at `range.location` and scroll it near the top of the view.
+        /// Clamps to the current text length, so a stale search range (the file was rewritten between
+        /// indexing and the jump) lands at the end instead of being silently dropped.
         func reveal(_ range: NSRange) {
             guard let textView else { return }
-            textView.textSelection = NSRange(location: range.location, length: 0)
+            let length = (textView.text as NSString?)?.length ?? 0
+            let location = min(max(0, range.location), length)
+            textView.textSelection = NSRange(location: location, length: 0)
             guard let scroll = textView.enclosingScrollView else { return }
             let layout = textView.textLayoutManager
             let content = textView.textContentManager
-            guard let loc = content.location(layout.documentRange.location, offsetBy: range.location),
+            guard let loc = content.location(layout.documentRange.location, offsetBy: location),
                   let fragment = layout.textLayoutFragment(for: loc) else { return }
             let clip = scroll.contentView
             let targetY = fragment.layoutFragmentFrame.minY - clip.bounds.height * 0.25
@@ -428,12 +522,64 @@ struct TextKitEditor: NSViewRepresentable {
             if let format = sender.representedObject as? InlineFormat { applyFormat(format) }
         }
 
+        // MARK: - Link & checkbox clicks (F2 / F4)
+
+        /// STTextView calls this on a click within a `.link` range. Returning `true` means we handled
+        /// it (suppresses the default NSWorkspace.open). We dispatch by scheme: `mdfire://toggle`
+        /// flips a checkbox, `mdfire://open?path=` follows an internal link, anything else (http…)
+        /// returns false so STTextView opens it in the browser.
+        func textView(_ textView: STTextView, clickedOnLink link: Any, at location: any NSTextLocation) -> Bool {
+            guard let url = (link as? URL) ?? (link as? String).flatMap({ URL(string: $0) }) else { return false }
+            guard url.scheme == "mdfire" else { return false }
+            switch url.host {
+            case "toggle":
+                return toggleCheckbox(at: location)
+            case "open":
+                let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "path" }?.value
+                if let path, let onFollowLink { onFollowLink(path); return true }
+                return false
+            default:
+                return false
+            }
+        }
+
+        /// Flip the `[ ]`/`[x]` at the clicked location and write it back into the buffer (which the
+        /// onCheckboxToggle hook then persists to disk). Re-parses current text so the range is fresh.
+        private func toggleCheckbox(at location: any NSTextLocation) -> Bool {
+            guard let textView else { return false }
+            let layout = textView.textLayoutManager
+            let content = textView.textContentManager
+            let offset = content.offset(from: layout.documentRange.location, to: location)
+            let text = textView.text ?? ""
+            let ns = text as NSString
+            guard offset >= 0, offset <= ns.length else { return false }
+            // Match the checkbox on the CLICKED LINE — robust to caret-location imprecision at edges.
+            let probe = NSRange(location: min(offset, max(0, ns.length - 1)), length: 0)
+            let line = ns.lineRange(for: probe)
+            let hit = parser.parse(text).first { node in
+                if case .taskItem = node.role, let cb = node.checkboxRange {
+                    return NSLocationInRange(cb.location, line)
+                }
+                return false
+            }
+            guard let cb = hit?.checkboxRange, NSMaxRange(cb) <= ns.length else { return false }
+            let toggled = ns.substring(with: cb).lowercased().contains("x") ? "[ ]" : "[x]"
+            textView.insertText(toggled, replacementRange: cb)
+            onCheckboxToggle?()
+            return true
+        }
+
         func textViewDidChangeText(_ notification: Notification) {
+            // Programmatic text swaps (open / external reload) restyle explicitly via reparseAndStyle;
+            // skip here so we don't reparse twice.
+            guard !isProgrammatic else { return }
             reparseAndStyle()
-            if !isProgrammatic, let text = textView?.text { onChange?(text) }
+            if let text = textView?.text { onChange?(text) }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            onActivated?()        // this pane is the one the user is interacting with (split routing)
             restyle()             // reveal/collapse markers + Focus + typewriter follow the caret
             scheduleFormatBar()   // show the formatting bar over a non-empty selection
         }
