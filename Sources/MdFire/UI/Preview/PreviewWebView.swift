@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import AppKit
 import Observation
 
 /// Lets the sidebar outline scroll the preview to a heading (the editor is hidden in Preview mode).
@@ -16,6 +17,7 @@ struct PreviewWebView: NSViewRepresentable {
     let markdown: String
     let title: String
     let dark: Bool
+    var columnChars: Int = 72
     var controller: PreviewController? = nil
     var onToggleTask: ((Int) -> Void)? = nil
 
@@ -26,6 +28,7 @@ struct PreviewWebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         // Weak proxy so the user-content controller doesn't retain the coordinator in a cycle.
         config.userContentController.add(WeakMessageHandler(context.coordinator), name: "mdtask")
+        config.userContentController.add(WeakMessageHandler(context.coordinator), name: "mdcopy")
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
         if #available(macOS 12.0, *) { web.underPageBackgroundColor = dark ? .black : .white }
@@ -33,47 +36,60 @@ struct PreviewWebView: NSViewRepresentable {
         controller?.scrollToHeading = { [weak coordinator = context.coordinator] title in
             coordinator?.scrollToHeading(title)
         }
-        context.coordinator.reload(markdown: markdown, title: title, dark: dark)
+        context.coordinator.reload(markdown: markdown, title: title, dark: dark, columnChars: columnChars)
         return web
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.onToggleTask = onToggleTask
-        context.coordinator.apply(markdown: markdown, title: title, dark: dark)
+        context.coordinator.apply(markdown: markdown, title: title, dark: dark, columnChars: columnChars)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var web: WKWebView?
         var onToggleTask: ((Int) -> Void)?
         private var lastDark: Bool?
+        private var lastColumnChars: Int?
         private var lastMarkdown = ""
+        private var lastTitle = ""
         private var ready = false
         private var pending: String?
         private var debounce: DispatchWorkItem?
 
-        func reload(markdown: String, title: String, dark: Bool) {
+        func reload(markdown: String, title: String, dark: Bool, columnChars: Int) {
             debounce?.cancel(); debounce = nil   // a stale body swap must not run against the new page
             pending = nil
             lastDark = dark
+            lastColumnChars = columnChars
             lastMarkdown = markdown
+            lastTitle = title
             ready = false
-            web?.loadHTMLString(HTMLRenderer.richHTML(from: markdown, title: title, dark: dark), baseURL: nil)
+            web?.loadHTMLString(HTMLRenderer.richHTML(from: markdown, title: title, dark: dark, columnChars: columnChars), baseURL: nil)
         }
 
-        func apply(markdown: String, title: String, dark: Bool) {
-            if dark != lastDark { reload(markdown: markdown, title: title, dark: dark); return }
+        func apply(markdown: String, title: String, dark: Bool, columnChars: Int) {
+            // Theme or column-width change → full reload (both live in the page CSS).
+            if dark != lastDark || columnChars != lastColumnChars {
+                reload(markdown: markdown, title: title, dark: dark, columnChars: columnChars); return
+            }
             guard markdown != lastMarkdown else { return }
+            let switchedDoc = title != lastTitle   // a different file, not an incremental edit
             lastMarkdown = markdown
+            lastTitle = title
             debounce?.cancel()
+            // A document switch should land in lockstep with the sidebar and editor (which reset
+            // synchronously) — swap the body NOW and jump to the top. Only incremental typing is
+            // debounced, to coalesce a burst of keystrokes into a single body swap.
+            guard !switchedDoc else { debounce = nil; pushBody(markdown, resetScroll: true); return }
             let work = DispatchWorkItem { [weak self] in self?.pushBody(markdown) }
             debounce = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
 
-        private func pushBody(_ markdown: String) {
+        private func pushBody(_ markdown: String, resetScroll: Bool = false) {
             let body = HTMLRenderer.articleBody(from: markdown)
             guard ready, let web else { pending = body; return }
-            web.evaluateJavaScript("window.__setBody(\(Self.jsString(body)))")
+            web.evaluateJavaScript("window.__setBody(\(Self.jsString(body)), \(resetScroll))")
         }
 
         func scrollToHeading(_ title: String) {
@@ -82,9 +98,21 @@ struct PreviewWebView: NSViewRepresentable {
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "mdtask" else { return }
-            if let index = (message.body as? Int) ?? (message.body as? Double).map(Int.init) {
-                onToggleTask?(index)
+            switch message.name {
+            case "mdtask":
+                if let index = (message.body as? Int) ?? (message.body as? Double).map(Int.init) {
+                    onToggleTask?(index)
+                }
+            case "mdcopy":
+                // The page already serialized the selection to Telegram-markdown — just put it on the
+                // pasteboard as plain text (Telegram ignores RTF, auto-formats its own markers on paste).
+                if let text = message.body as? String, !text.isEmpty {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(text, forType: .string)
+                }
+            default:
+                break
             }
         }
 

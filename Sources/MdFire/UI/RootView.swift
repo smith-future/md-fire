@@ -133,6 +133,7 @@ struct RootView: View {
             if settings.previewVisible {
                 // Full-area rendered reader (tables / Mermaid / code / math). Switch to Source to edit.
                 PreviewWebView(markdown: document.text, title: document.displayName, dark: isDark,
+                               columnChars: measure,
                                controller: previewController,
                                onToggleTask: { document.toggleTask($0) })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

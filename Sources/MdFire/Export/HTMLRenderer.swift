@@ -36,7 +36,7 @@ enum HTMLRenderer {
     /// `__setBody` hook for flicker-free incremental updates. Renders beautifully online; degrades
     /// gracefully offline (code shows unhighlighted, diagrams as source, math as raw `$…$`). Updates
     /// parse into a detached document and move nodes in (no innerHTML, scripts never execute).
-    static func richHTML(from markdown: String, title: String, dark: Bool) -> String {
+    static func richHTML(from markdown: String, title: String, dark: Bool, columnChars: Int = 72) -> String {
         let hlTheme = dark ? "github-dark" : "github"
         return """
         <!DOCTYPE html>
@@ -48,6 +48,11 @@ enum HTMLRenderer {
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/\(hlTheme).min.css">
         <style>\(css(dark: dark))</style>
+        <style>
+          /* On-screen reader: start near the top like the editor (export keeps the big page margins). */
+          article { max-width: calc(\(columnChars)ch + 48px); padding-top: 20px; }
+          article > :first-child { margin-top: 0; }
+        </style>
         <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
         <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
@@ -59,11 +64,12 @@ enum HTMLRenderer {
             try { if (window.renderMathInElement) renderMathInElement(document.body, { delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}], throwOnError: false }); } catch (e) {}
           }
           // Parse into a detached document (scripts never run) and move the nodes in — no innerHTML.
-          window.__setBody = function(html) {
+          window.__setBody = function(html, resetScroll) {
             var article = document.getElementById('article');
             if (!article) return;
             var parsed = new DOMParser().parseFromString(html, 'text/html');
             article.replaceChildren.apply(article, Array.prototype.slice.call(parsed.body.childNodes));
+            if (resetScroll) window.scrollTo(0, 0);
             __render();
           };
           // Interactive task checkboxes: a change posts the checkbox's index (DOM order == file order)
@@ -84,6 +90,70 @@ enum HTMLRenderer {
               if (hs[i].textContent.trim() === text) { hs[i].scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
             }
           };
+          // Floating "Copy for Telegram": select text in the reader → a button appears → a click copies
+          // the selection as Telegram-markdown (bold/italic/code/strike/links kept). The reader has no
+          // source markers, so we serialize the selected DOM straight to TG markup. Only wired when
+          // hosted in the app (the mdcopy bridge exists); exported standalone HTML omits the button.
+          var __NL = String.fromCharCode(10);
+          function __tgSer(node) {
+            if (node.nodeType === 3) return node.nodeValue;
+            if (node.nodeType !== 1 && node.nodeType !== 11) return '';
+            var tag = node.nodeName ? node.nodeName.toLowerCase() : '';
+            if (tag === 'pre') return __NL + '```' + __NL + (node.textContent || '').trim() + __NL + '```' + __NL;
+            if (tag === 'input' || tag === 'button' || tag === 'style' || tag === 'script') return '';
+            var inner = '';
+            for (var i = 0; i < node.childNodes.length; i++) inner += __tgSer(node.childNodes[i]);
+            switch (tag) {
+              case 'strong': case 'b': return inner ? '**' + inner + '**' : '';
+              case 'em': case 'i': return inner ? '__' + inner + '__' : '';
+              case 'del': case 's': case 'strike': return inner ? '~~' + inner + '~~' : '';
+              case 'code': return inner ? '`' + inner + '`' : '';
+              case 'a': var href = node.getAttribute ? node.getAttribute('href') : ''; return href ? '[' + inner + '](' + href + ')' : inner;
+              case 'br': return __NL;
+              case 'li': return '- ' + inner.trim() + __NL;
+              case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': return __NL + '**' + inner.trim() + '**' + __NL;
+              case 'blockquote': return inner.split(__NL).map(function (l) { return l ? '> ' + l : l; }).join(__NL) + __NL;
+              case 'p': case 'div': case 'tr': return inner + __NL + __NL;
+              case 'ul': case 'ol': return inner + __NL;
+              default: return inner;
+            }
+          }
+          function __tgSetup() {
+            if (!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mdcopy)) return;
+            var btn = document.createElement('button');
+            btn.style.cssText = 'position:fixed;z-index:99999;display:none;padding:5px 11px;border:none;border-radius:7px;font:600 12px -apple-system,system-ui,sans-serif;cursor:pointer;background:#15BDEC;color:#fff;box-shadow:0 3px 14px rgba(0,0,0,.35)';
+            btn.textContent = '✈ Copy for Telegram';
+            document.body.appendChild(btn);
+            btn.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the selection alive
+            function hide() { btn.style.display = 'none'; }
+            function place() {
+              var sel = window.getSelection();
+              if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !sel.toString().trim()) { hide(); return; }
+              var r = sel.getRangeAt(0).getBoundingClientRect();
+              if (!r || (r.width === 0 && r.height === 0)) { hide(); return; }
+              btn.textContent = '✈ Copy for Telegram';
+              var top = r.top - 38; if (top < 6) top = r.bottom + 8;
+              btn.style.top = top + 'px';
+              btn.style.left = Math.max(6, Math.min(r.left, window.innerWidth - 190)) + 'px';
+              btn.style.display = 'block';
+            }
+            btn.addEventListener('click', function () {
+              var sel = window.getSelection();
+              if (!sel || sel.rangeCount === 0) return;
+              var md = __tgSer(sel.getRangeAt(0).cloneContents()).trim();
+              if (md) window.webkit.messageHandlers.mdcopy.postMessage(md);
+              btn.textContent = '✓ Copied';
+              setTimeout(hide, 900);
+            });
+            document.addEventListener('mouseup', place);
+            document.addEventListener('selectionchange', function () {
+              var s = window.getSelection();
+              if (!s || s.isCollapsed || !s.toString().trim()) hide();
+            });
+            window.addEventListener('scroll', hide, true);
+          }
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', __tgSetup);
+          else __tgSetup();
           window.addEventListener('load', __render);
         </script>
         </head>
