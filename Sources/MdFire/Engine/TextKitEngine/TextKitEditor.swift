@@ -59,6 +59,7 @@ struct TextKitEditor: NSViewRepresentable {
         // length == storage length. WYSIWYG hiding is therefore attribute-based (near-zero-width,
         // transparent markers) in LiveWYSIWYGPolicy — storage length stays intact.
         textView.text = text
+        coordinator.lastSyncedText = text
         coordinator.reparseAndStyle()
         coordinator.observeScroll(scrollView)
         controller?.revealHandler = { [weak coordinator] range in coordinator?.reveal(range) }
@@ -102,6 +103,7 @@ struct TextKitEditor: NSViewRepresentable {
                 // A different document was opened (sidebar / ⌘O / New) — hard reset to the top.
                 coordinator.isProgrammatic = true
                 textView.text = text
+                coordinator.lastSyncedText = text
                 coordinator.isProgrammatic = false
                 coordinator.reparseAndStyle()
             }
@@ -115,6 +117,11 @@ struct TextKitEditor: NSViewRepresentable {
         var mode: RenderMode
         var theme: Theme
         var isProgrammatic = false
+        /// The text we last set programmatically or last reported as a user edit. STTextView posts
+        /// `didChangeText` ASYNCHRONOUSLY after a programmatic `text =`, by which point `isProgrammatic`
+        /// is already false — so we gate onChange on CONTENT, not the flag, to avoid falsely marking a
+        /// freshly-loaded document dirty (which then blocks file switching behind a save prompt).
+        var lastSyncedText: String = ""
         var onChange: ((String) -> Void)?
         var onCheckboxToggle: (() -> Void)?        // F2: persist a checkbox tick to disk
         var onFollowLink: ((String) -> Void)?      // F4: resolve + open an internal link destination
@@ -303,6 +310,7 @@ struct TextKitEditor: NSViewRepresentable {
             self.changeAlpha = changedRanges.isEmpty ? 0 : 1
             isProgrammatic = true
             textView.text = newText
+            lastSyncedText = newText
             isProgrammatic = false
             reparseAndStyle()
             if let scroll, let origin = savedOrigin {
@@ -571,11 +579,11 @@ struct TextKitEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeText(_ notification: Notification) {
-            // Programmatic text swaps (open / external reload) restyle explicitly via reparseAndStyle;
-            // skip here so we don't reparse twice.
-            guard !isProgrammatic else { return }
             reparseAndStyle()
-            if let text = textView?.text { onChange?(text) }
+            let current = textView?.text ?? ""
+            guard current != lastSyncedText else { return }   // programmatic echo, not a user edit
+            lastSyncedText = current
+            onChange?(current)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
