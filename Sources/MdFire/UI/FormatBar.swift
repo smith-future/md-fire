@@ -10,6 +10,12 @@ struct FormatBar: View {
 
     var body: some View {
         HStack(spacing: 1) {
+            headingButton(1)
+            headingButton(2)
+            headingButton(3)
+
+            Divider().frame(height: 18)
+
             button("bold", .bold, help: "Bold")
             button("italic", .italic, help: "Italic")
             button("curlybraces", .code, help: "Code")
@@ -43,5 +49,16 @@ struct FormatBar: View {
         }
         .buttonStyle(.borderless)
         .help(help)
+    }
+
+    private func headingButton(_ level: Int) -> some View {
+        Button { apply(.heading(level)) } label: {
+            Text("H\(level)")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 26, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help("Heading \(level) (toggle)")
     }
 }

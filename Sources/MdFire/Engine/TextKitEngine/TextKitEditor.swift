@@ -58,12 +58,13 @@ struct TextKitEditor: NSViewRepresentable {
         // textContentStorage.delegate) breaks STTextView's layout/selection, which assumes display
         // length == storage length. WYSIWYG hiding is therefore attribute-based (near-zero-width,
         // transparent markers) in LiveWYSIWYGPolicy — storage length stays intact.
+        coordinator.lastSyncedText = text   // set BEFORE the assignment: STTextView fires didChangeText synchronously from `text =`
         textView.text = text
-        coordinator.lastSyncedText = text
         coordinator.reparseAndStyle()
         coordinator.observeScroll(scrollView)
         controller?.revealHandler = { [weak coordinator] range in coordinator?.reveal(range) }
         controller?.formatHandler = { [weak coordinator] format in coordinator?.applyFormat(format) }
+        controller?.focusHandler = { [weak textView] in textView?.window?.makeFirstResponder(textView) }
         return scrollView
     }
 
@@ -101,10 +102,10 @@ struct TextKitEditor: NSViewRepresentable {
                 coordinator.reloadPreservingViewport(newText: text, changedRanges: changedRanges)
             } else {
                 // A different document was opened (sidebar / ⌘O / New) — hard reset to the top.
-                coordinator.isProgrammatic = true
-                textView.text = text
+                // Set lastSyncedText BEFORE assigning `text`: STTextView fires didChangeText
+                // synchronously from the setter, so the echo is recognized by content and suppressed.
                 coordinator.lastSyncedText = text
-                coordinator.isProgrammatic = false
+                textView.text = text
                 coordinator.reparseAndStyle()
             }
         } else if appearanceChanged || typewriterChanged {
@@ -116,11 +117,12 @@ struct TextKitEditor: NSViewRepresentable {
         weak var textView: STTextView?
         var mode: RenderMode
         var theme: Theme
-        var isProgrammatic = false
         /// The text we last set programmatically or last reported as a user edit. STTextView posts
-        /// `didChangeText` ASYNCHRONOUSLY after a programmatic `text =`, by which point `isProgrammatic`
-        /// is already false — so we gate onChange on CONTENT, not the flag, to avoid falsely marking a
-        /// freshly-loaded document dirty (which then blocks file switching behind a save prompt).
+        /// `didChangeText` SYNCHRONOUSLY from inside its `text =` setter, so onChange is gated on
+        /// CONTENT (current != lastSyncedText), not on any flag. Every programmatic text-set therefore
+        /// assigns `lastSyncedText` BEFORE `textView.text =`, so the synchronous echo matches by content
+        /// and is suppressed — otherwise a freshly-loaded document is falsely marked dirty (which then
+        /// blocks file switching behind a save prompt).
         var lastSyncedText: String = ""
         var onChange: ((String) -> Void)?
         var onCheckboxToggle: (() -> Void)?        // F2: persist a checkbox tick to disk
@@ -292,6 +294,10 @@ struct TextKitEditor: NSViewRepresentable {
                          revealLocation: caret, focusActive: focusActive, posTags: posTags,
                          bionicRanges: bionicRanges, changedRanges: changedRanges, changeAlpha: changeAlpha)
             if typewriter { centerCaretLine() }
+            // The format bar must not linger when there's no selection — a document switch resets the
+            // text programmatically (no selection-change delegate fires), so without this the transient
+            // popover stays stuck over the new doc and eats the next click (blocking file switching).
+            if textView.textSelection.length == 0, formatPopover.isShown { formatPopover.performClose(nil) }
         }
 
         // MARK: - F1 live reload (preserve viewport) + change-tint decay
@@ -305,13 +311,13 @@ struct TextKitEditor: NSViewRepresentable {
             let savedOrigin = scroll?.contentView.bounds.origin
             let savedSelection = textView.textSelection
             // Set the highlight state BEFORE the text swap so the single (explicit) reparseAndStyle
-            // already tints; textViewDidChangeText skips its own reparse while isProgrammatic.
+            // already tints. STTextView fires textViewDidChangeText synchronously from the `text =`
+            // setter; lastSyncedText is set first so that echo is recognized by content and onChange
+            // is suppressed (the reparse it triggers is harmless — we reparse again explicitly below).
             self.changedRanges = changedRanges
             self.changeAlpha = changedRanges.isEmpty ? 0 : 1
-            isProgrammatic = true
-            textView.text = newText
             lastSyncedText = newText
-            isProgrammatic = false
+            textView.text = newText
             reparseAndStyle()
             if let scroll, let origin = savedOrigin {
                 scroll.contentView.scroll(to: origin)
@@ -435,6 +441,7 @@ struct TextKitEditor: NSViewRepresentable {
 
         /// Wrap the selection (or insert an empty pair at the caret) in a Markdown marker.
         func applyFormat(_ format: InlineFormat) {
+            if case .heading(let level) = format { applyHeading(level); return }
             guard let textView else { return }
             let selection = textView.textSelection
             let marker = format.marker
@@ -449,6 +456,37 @@ struct TextKitEditor: NSViewRepresentable {
                 textView.insertText(marker + marker, replacementRange: selection)
                 textView.textSelection = NSRange(location: selection.location + marker.count, length: 0)
             }
+        }
+
+        /// Block-level heading: toggle/replace the leading ATX `#` run on the line containing the
+        /// caret (or selection start). Re-applying the same level — or level 0 — clears it to body.
+        /// Operates on a single line (the selection's first line); markdown headings are per-line.
+        func applyHeading(_ level: Int) {
+            guard let textView else { return }
+            let ns = (textView.text ?? "") as NSString
+            let sel = textView.textSelection
+            guard sel.location <= ns.length else { return }
+            let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+            let lineStr = ns.substring(with: lineRange)
+            let hasNewline = lineStr.hasSuffix("\n")
+            let body = hasNewline ? String(lineStr.dropLast()) : lineStr
+
+            // Current level: 1–6 leading '#'s immediately followed by a space.
+            var hashes = 0
+            var idx = body.startIndex
+            while idx < body.endIndex, body[idx] == "#", hashes < 6 {
+                hashes += 1; idx = body.index(after: idx)
+            }
+            let current = (hashes >= 1 && idx < body.endIndex && body[idx] == " ") ? hashes : 0
+            let rest = current > 0 ? String(body.dropFirst(current + 1)) : body
+
+            let newLevel = (current == level) ? 0 : level          // re-tapping the active level clears it
+            let newBody = newLevel > 0 ? String(repeating: "#", count: newLevel) + " " + rest : rest
+            textView.insertText(newBody + (hasNewline ? "\n" : ""), replacementRange: lineRange)
+
+            let caret = lineRange.location + (newBody as NSString).length
+            let len = ((textView.text ?? "") as NSString).length
+            textView.textSelection = NSRange(location: min(caret, len), length: 0)
         }
 
         /// Copy the current selection, converted to Telegram-markdown, to the pasteboard.
@@ -511,6 +549,10 @@ struct TextKitEditor: NSViewRepresentable {
                 submenu.addItem(formatItem("Italic", .italic))
                 submenu.addItem(formatItem("Code", .code))
                 submenu.addItem(formatItem("Strikethrough", .strikethrough))
+                submenu.addItem(.separator())
+                submenu.addItem(formatItem("Heading 1", .heading(1)))
+                submenu.addItem(formatItem("Heading 2", .heading(2)))
+                submenu.addItem(formatItem("Heading 3", .heading(3)))
                 let root = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
                 root.submenu = submenu
                 menu.insertItem(root, at: 0)
