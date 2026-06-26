@@ -3,10 +3,12 @@ import MarkdownCore
 
 /// A heading in the current document's outline.
 struct OutlineItem: Identifiable, Hashable {
-    let id = UUID()
     let level: Int
     let title: String
     let range: NSRange
+    /// Stable identity (content + position) so the List diffs rows instead of tearing them all down
+    /// on every keystroke — a fresh `UUID()` per parse made ForEach rebuild the whole outline.
+    var id: String { "\(level):\(range.location):\(title)" }
 }
 
 /// The sidebar: the workspace file tree plus the current document's heading outline. Selecting a file
@@ -14,10 +16,11 @@ struct OutlineItem: Identifiable, Hashable {
 struct SidebarView: View {
     let workspace: WorkspaceModel
     @Binding var selection: URL?
-    let documentText: String
+    let outline: [OutlineItem]
     var documentURL: URL? = nil
     var pinSpecialFiles: Bool = true
     let onOutlineSelect: (OutlineItem) -> Void
+    var onNewFile: () -> Void = {}
 
     private static let parser = TreeSitterParser()
 
@@ -101,7 +104,6 @@ struct SidebarView: View {
                 }
             }
 
-            let outline = Self.outline(from: documentText)
             if !outline.isEmpty {
                 Section("OUTLINE") {
                     ForEach(outline) { item in
@@ -126,6 +128,38 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) { newFileBar }
+    }
+
+    /// A slim footer toolbar (à la Finder / Mail) pinned under the file list, with a single "New file"
+    /// action. Only shown once a workspace folder is open. No hover @State — mutating state from an
+    /// `.onHover` that can fire during a split-view divider double-click's nested event/layout flush
+    /// re-enters AppKit's constraint cycle and crashes; a static pill reads as a button without it.
+    @ViewBuilder private var newFileBar: some View {
+        if workspace.root != nil {
+            VStack(spacing: 0) {
+                Divider()
+                HStack(spacing: 0) {
+                    Button(action: onNewFile) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "square.and.pencil").font(.system(size: 12))
+                            Text("New file").font(.system(size: 12)).lineLimit(1)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("New file in this folder (⇧⌘N)")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+            .background(.bar)
+        }
     }
 
     /// Checklist badge for a sidebar node: a file's own progress, or a folder's recursive rollup.

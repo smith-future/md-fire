@@ -64,6 +64,46 @@ final class WorkspaceModel {
         tree = Self.buildTree(at: root)
     }
 
+    /// Prompt for a name and create a new empty `.md` file in the workspace root. Returns its URL so
+    /// the caller can open + select it (nil if there's no root, the user cancelled, or the write failed).
+    @discardableResult
+    func createFileInteractively() -> URL? {
+        guard let root else { return nil }
+        let alert = NSAlert()
+        alert.messageText = "New File"
+        alert.informativeText = "Name for the new markdown file in “\(root.lastPathComponent)”:"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = "Untitled"
+        field.placeholderString = "Untitled"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return createFile(named: field.stringValue, in: root)
+    }
+
+    /// Create an empty `.md` file named `rawName` (a trailing `.md` is optional) under `dir`,
+    /// disambiguating with " 2", " 3", … if the name is taken. Refreshes the tree so it appears at once.
+    @discardableResult
+    func createFile(named rawName: String, in dir: URL) -> URL? {
+        var base = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.lowercased().hasSuffix(".md") { base = String(base.dropLast(3)) }
+        base = base.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        if base.isEmpty { base = "Untitled" }
+
+        let fm = FileManager.default
+        var url = dir.appendingPathComponent(base + ".md")
+        var n = 2
+        while fm.fileExists(atPath: url.path) {
+            url = dir.appendingPathComponent("\(base) \(n).md")
+            n += 1
+        }
+        guard (try? "".write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
+        refresh()
+        return url
+    }
+
     /// Special plan/spec files (CLAUDE.md, ROADMAP.md, *-SPEC.md, anything under .planning/) flattened
     /// from the tree, for the pinned sidebar section. Reads `tree` so it stays live.
     var specialFiles: [URL] {

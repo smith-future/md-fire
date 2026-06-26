@@ -17,6 +17,7 @@ final class MarkdownDocument {
     enum ExternalChange: Equatable {
         case reloaded(changes: Int)   // auto-reloaded; N line-regions changed
         case conflict                 // disk changed but we have unsaved edits (or auto-reload off)
+        case deleted                  // the open file was deleted/moved on disk → detached to Untitled
     }
 
     /// UTF-16 line ranges changed by the last external reload — the editor tints these, decaying.
@@ -33,8 +34,6 @@ final class MarkdownDocument {
     @ObservationIgnored private var pendingDiskText: String?
     /// A disk version the user chose to ignore (Keep Mine) — don't re-prompt for the same bytes.
     @ObservationIgnored private var ignoredDiskText: String?
-    /// Timestamp of our own last save, so the watcher ignores the event our `write` just caused.
-    @ObservationIgnored private var lastSelfWriteAt: Date?
     @ObservationIgnored private var watcher: FileWatcher?
     /// Set by the app so the document can honour the Auto-reload / Show-changes preferences.
     @ObservationIgnored var settings: AppSettings?
@@ -117,19 +116,55 @@ final class MarkdownDocument {
     /// toggles so a tick survives without an explicit ⌘S.
     func saveIfBacked() { if fileURL != nil { save() } }
 
-    /// Toggle the N-th task checkbox (document order) — driven by clicking a checkbox in the rendered
-    /// preview, where the editor isn't available. Writes back to disk if the doc is file-backed.
-    func toggleTask(_ index: Int) {
-        let tasks = TreeSitterParser().parse(text).filter {
-            if case .taskItem = $0.role { return true }; return false
-        }
-        guard index >= 0, index < tasks.count, let cb = tasks[index].checkboxRange else { return }
+    /// Toggle the task checkbox on a given 1-indexed SOURCE line — driven by clicking a checkbox in the
+    /// rendered preview. The preview anchors each box to its source line (`data-line`, from the same
+    /// swift-markdown parse that emitted it), so this never depends on two parsers agreeing on which
+    /// list items are tasks (a mismatch otherwise toggles the wrong box and corrupts the file).
+    func toggleTask(_ line: Int) {
+        guard line > 0 else { return }
         let ns = text as NSString
-        guard NSMaxRange(cb) <= ns.length else { return }
-        let toggled = ns.substring(with: cb).lowercased().contains("x") ? "[ ]" : "[x]"
+        // Resolve the 1-indexed line to its character range.
+        var idx = 0, current = 1
+        var lineRange: NSRange?
+        while idx <= ns.length {
+            let r = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
+            if current == line { lineRange = r; break }
+            let next = NSMaxRange(r)
+            if next <= idx { break }                 // no progress (last line had no trailing newline)
+            idx = next; current += 1
+        }
+        guard let lr = lineRange else { return }
+
+        // The leftmost `[ ]` / `[x]` on the line is the task marker (`- [ ] …`).
+        let unchecked = ns.range(of: "[ ]", options: [], range: lr)
+        let checked = ns.range(of: "[x]", options: .caseInsensitive, range: lr)
+        let cb: NSRange, toggled: String
+        if unchecked.location != NSNotFound,
+           checked.location == NSNotFound || unchecked.location < checked.location {
+            cb = unchecked; toggled = "[x]"
+        } else if checked.location != NSNotFound {
+            cb = checked; toggled = "[ ]"
+        } else { return }
+
         text = ns.replacingCharacters(in: cb, with: toggled)
         isDirty = true
         saveIfBacked()
+    }
+
+    /// Character offset of the start of the 1-indexed source `line` (nil if out of range) — used to
+    /// place the caret where the user clicked in the preview when flipping to Source.
+    func offset(ofLine line: Int) -> Int? {
+        guard line > 0 else { return nil }
+        let ns = text as NSString
+        var idx = 0, current = 1
+        while idx <= ns.length {
+            if current == line { return idx }
+            let r = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
+            let next = NSMaxRange(r)
+            if next <= idx { break }
+            idx = next; current += 1
+        }
+        return nil
     }
 
     /// Checklist completion for the current buffer, cached so the status bar doesn't re-parse on
@@ -142,6 +177,18 @@ final class MarkdownDocument {
         taskCacheText = text
         taskCacheValue = total > 0 ? (done, total) : nil
         return taskCacheValue
+    }
+
+    /// The document outline (headings), cached by text so the permanently-mounted sidebar doesn't
+    /// re-run tree-sitter over the whole document on every unrelated redraw (selection, hover, status).
+    @ObservationIgnored private var outlineCacheText: String?
+    @ObservationIgnored private var outlineCacheValue: [OutlineItem] = []
+    var outline: [OutlineItem] {
+        if outlineCacheText == text { return outlineCacheValue }
+        let value = SidebarView.outline(from: text)
+        outlineCacheText = text
+        outlineCacheValue = value
+        return value
     }
 
     @discardableResult
@@ -157,7 +204,6 @@ final class MarkdownDocument {
     private func write(to url: URL) -> Bool {
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
-            lastSelfWriteAt = Date()                 // stamped AFTER the write so the timing window is real
             let wasURL = fileURL
             fileURL = url
             isDirty = false
@@ -182,8 +228,12 @@ final class MarkdownDocument {
 
     /// FSEvents told us the file changed on disk. Decide between silent reload and a conflict banner.
     private func handleExternalChange() {
-        if let t = lastSelfWriteAt, Date().timeIntervalSince(t) < 0.6 { return }   // our own save (timing)
-        guard let url = fileURL, let disk = try? String(contentsOf: url, encoding: .utf8) else { return }
+        guard let url = fileURL else { return }
+        // Deleted/moved on disk (trash, rename) → detach into an unsaved Untitled buffer: the content
+        // stays visible and switching to other files isn't blocked behind a save prompt with nowhere
+        // to write back. (We watch the parent dir, so a trash/rename of the open file fires here.)
+        guard FileManager.default.fileExists(atPath: url.path) else { handleOpenFileDeleted(); return }
+        guard let disk = try? String(contentsOf: url, encoding: .utf8) else { return }
         // Content-based guards: disk == diskBaseline means it's our own write (or unchanged) regardless
         // of timing; disk == text means the buffer already matches; ignoredDiskText was declined.
         guard disk != diskBaseline, disk != text, disk != ignoredDiskText else { return }
@@ -210,6 +260,21 @@ final class MarkdownDocument {
         externalChange = .reloaded(changes: changedRanges.count)
     }
 
+    /// The open file vanished from disk (deleted or moved). Keep the in-memory text but detach it into
+    /// an unsaved "Untitled" buffer: the user can ⌘S (Save As) to keep it, and — crucially — switching
+    /// to another file is no longer blocked by a save prompt that would have nothing to write back to.
+    private func handleOpenFileDeleted() {
+        fileURL = nil
+        isDirty = false               // user removed the file; don't gate file switching on a save prompt
+        isPlaceholder = false
+        diskBaseline = text
+        pendingDiskText = nil
+        ignoredDiskText = nil
+        externalChange = .deleted
+        // Drop the watcher on the next tick (we're inside its own callback right now).
+        DispatchQueue.main.async { [weak self] in self?.watcher = nil }
+    }
+
     /// Conflict resolution: take the disk version (discard my unsaved edits).
     func resolveConflictTakeDisk() {
         guard let disk = pendingDiskText else { externalChange = nil; return }
@@ -226,14 +291,20 @@ final class MarkdownDocument {
         externalChange = nil
     }
 
-    /// Dismiss the transient "reloaded" banner.
+    /// Dismiss a transient top banner (the "reloaded" toast or the "file deleted" notice).
     func dismissReloadBanner() {
-        if case .reloaded = externalChange { externalChange = nil }
+        switch externalChange {
+        case .reloaded, .deleted: externalChange = nil
+        default: break
+        }
     }
 
     /// Returns false if the user cancels out of an unsaved-changes prompt.
     private func confirmDiscardIfNeeded() -> Bool {
         guard isDirty, !isPlaceholder else { return true }   // disposable welcome buffer never blocks
+        // Backing file deleted/moved on disk (before the watcher detached it) → nothing to save back
+        // to, so don't strand the user behind a prompt; allow the switch.
+        if let url = fileURL, !FileManager.default.fileExists(atPath: url.path) { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to “\(displayName)”?"
         alert.informativeText = "Your changes will be lost if you don’t save them."

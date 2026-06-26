@@ -14,6 +14,7 @@ struct MdFireApp: App {
     @State private var settings: AppSettings
     @State private var palette = PaletteModel()
     @State private var activePane: ActivePane
+    @State private var openRequest = OpenRequest()
 
     init() {
         let settings = AppSettings()
@@ -35,7 +36,7 @@ struct MdFireApp: App {
         WindowGroup {
             RootView(document: document, splitDocument: splitDocument, workspace: workspace,
                      editor: editor, splitEditor: splitEditor, settings: settings,
-                     palette: palette, activePane: activePane)
+                     palette: palette, activePane: activePane, openRequest: openRequest)
                 .frame(minWidth: 640, minHeight: 480)
         }
         .windowStyle(.hiddenTitleBar)               // UI-DESIGN §4.1: chromeless
@@ -44,6 +45,13 @@ struct MdFireApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New") { document.newDocument() }
                     .keyboardShortcut("n")
+                Button("New File…") {
+                    DispatchQueue.main.async {
+                        if let url = workspace.createFileInteractively() { openRequest.url = url }
+                    }
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(workspace.root == nil)
                 Button("Open…") { document.open() }
                     .keyboardShortcut("o")
                 Button("Open Folder…") { workspace.openFolder() }
@@ -85,6 +93,15 @@ struct MdFireApp: App {
                     .keyboardShortcut("e")
                 Button("Strikethrough") { activePane.editor.format(.strikethrough) }
                     .keyboardShortcut("x", modifiers: [.command, .shift])
+                Divider()
+                Button("Heading 1") { activePane.editor.format(.heading(1)) }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("Heading 2") { activePane.editor.format(.heading(2)) }
+                    .keyboardShortcut("2", modifiers: .command)
+                Button("Heading 3") { activePane.editor.format(.heading(3)) }
+                    .keyboardShortcut("3", modifiers: .command)
+                Button("Body Text") { activePane.editor.format(.heading(0)) }
+                    .keyboardShortcut("0", modifiers: .command)
                 Divider()
                 Button("Copy for Telegram") { TelegramFormatter.copyToPasteboard(from: activePane.document.text) }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
