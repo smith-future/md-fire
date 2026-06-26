@@ -12,6 +12,7 @@ struct RootView: View {
     @Bindable var settings: AppSettings
     let palette: PaletteModel
     let activePane: ActivePane
+    let openRequest: OpenRequest
 
     @State private var mode: RenderMode = .syntaxVisible   // raw markdown editor; Preview renders it
     @State private var measure = 72
@@ -24,6 +25,9 @@ struct RootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isDropTargeted = false
     @State private var telegramCopied = false
+    /// True while Source was entered automatically by double-clicking the preview, so blurring the
+    /// editor flips back to Preview (manual Source toggles leave this false → no auto-return).
+    @State private var autoSourceActive = false
     @State private var statusIdle = false
     @State private var idleWork: DispatchWorkItem?
     @State private var reloadDismissWork: DispatchWorkItem?
@@ -45,14 +49,15 @@ struct RootView: View {
             SidebarView(
                 workspace: workspace,
                 selection: $selectedFile,
-                documentText: document.text,
+                outline: document.outline,
                 documentURL: document.fileURL,
                 pinSpecialFiles: settings.pinSpecialFiles,
                 onOutlineSelect: { item in
                     // Preview is full-screen (no editor): scroll the rendered pane; else jump the editor.
                     if settings.previewVisible { previewController.scrollToHeading?(item.title) }
                     else { editor.reveal(item.range) }
-                }
+                },
+                onNewFile: newFile
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
         } detail: {
@@ -65,6 +70,15 @@ struct RootView: View {
             document.openFile(at: url)
             // If the open was declined (unsaved-changes cancel), resync the highlight to what's open.
             if document.fileURL != url { selectedFile = document.fileURL }
+        }
+        // File-menu New File (⇧⌘N) routes through here so its result is selected + highlighted like the
+        // sidebar button. Fires only on an explicit menu action (never mid-layout), so it's loop-safe.
+        .onChange(of: openRequest.url) { _, url in
+            if let url { selectedFile = url }
+        }
+        // Any manual return to Preview cancels the auto-edit session (so a later blur doesn't re-toggle).
+        .onChange(of: settings.previewVisible) { _, visible in
+            if visible { autoSourceActive = false }
         }
         // Drag a file/folder from Finder anywhere onto the window to open it.
         .dropDestination(for: URL.self) { urls, _ in
@@ -106,8 +120,46 @@ struct RootView: View {
     private func openFromPalette(_ url: URL, _ range: NSRange?) {
         if selectedFile == url { document.openFile(at: url) }   // already selected → onChange won't fire
         else { selectedFile = url }
-        if let range {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { editor.reveal(range) }
+        guard let range else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            // Only reveal if the open actually landed on the requested file — a declined unsaved-changes
+            // prompt (or any other file now open) must not jump the wrong document to a stale range.
+            guard document.fileURL == url else { return }
+            editor.reveal(range)
+        }
+    }
+
+    /// A click in the rendered preview → flip to Source for editing, focus the editor, and land the
+    /// caret on the SAME block the user clicked (its source `line`) instead of jumping to the top. The
+    /// session is remembered so clicking the free margin area returns to Preview.
+    private func enterSourceFromPreview(atLine line: Int) {
+        guard settings.previewVisible else { return }
+        settings.previewVisible = false
+        autoSourceActive = true
+        // Act once the editor view exists (the mode swap mounts it on the next render pass).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            editor.focus()
+            if line > 0, let offset = document.offset(ofLine: line) {
+                editor.reveal(NSRange(location: offset, length: 0))
+            }
+        }
+    }
+
+    /// Editor lost focus while in an auto-entered edit session → go back to Preview. Clears the flag
+    /// first so the editor-removal blur that the swap itself causes doesn't re-enter here.
+    private func returnToPreviewIfAuto() {
+        guard autoSourceActive else { return }
+        autoSourceActive = false
+        settings.previewVisible = true
+    }
+
+    /// Sidebar "✎" — create a new markdown file in the workspace, then open + highlight it (setting
+    /// `selectedFile` drives the open via its `.onChange`). Deferred to a clean run-loop turn so the
+    /// modal prompt + state change never run inside the button's event/layout transaction (which
+    /// re-enters AppKit's constraint cycle and crashes — see the AutoLayout gotcha in CLAUDE.md).
+    private func newFile() {
+        DispatchQueue.main.async {
+            if let url = workspace.createFileInteractively() { selectedFile = url }
         }
     }
 
@@ -134,8 +186,10 @@ struct RootView: View {
                 // Full-area rendered reader (tables / Mermaid / code / math). Switch to Source to edit.
                 PreviewWebView(markdown: document.text, title: document.displayName, dark: isDark,
                                columnChars: measure,
+                               docID: document.fileURL?.path ?? "",
                                controller: previewController,
-                               onToggleTask: { document.toggleTask($0) })
+                               onToggleTask: { document.toggleTask($0) },
+                               onRequestEdit: { enterSourceFromPreview(atLine: $0) })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if settings.splitView {
                 HSplitView {
@@ -143,7 +197,16 @@ struct RootView: View {
                     pane(document: splitDocument, editor: splitEditor, isPrimary: false)
                 }
             } else {
-                pane(document: document, editor: editor, isPrimary: true)
+                ZStack {
+                    // During an auto-edit session (entered by clicking the preview), a click in the free
+                    // margin area around the centered text column returns to Preview. The editor sits on
+                    // top and keeps its own clicks; only taps that miss it reach this background.
+                    if autoSourceActive {
+                        Color.clear.contentShape(Rectangle())
+                            .onTapGesture { returnToPreviewIfAuto() }
+                    }
+                    pane(document: document, editor: editor, isPrimary: true)
+                }
             }
 
             statusBar
@@ -159,7 +222,10 @@ struct RootView: View {
         }
         .onAppear { bumpStatusActivity() }
         .onChange(of: document.externalChange) { _, change in
-            if case .reloaded = change { scheduleReloadBannerDismiss() }
+            switch change {
+            case .reloaded, .deleted: scheduleReloadBannerDismiss()
+            default: break
+            }
         }
     }
 
@@ -191,6 +257,17 @@ struct RootView: View {
                     .controlSize(.small)
             }
             .layoutPriority(-1)
+
+        case .deleted:
+            banner(background: NSColor.systemGray) {
+                Label("File deleted on disk — now an unsaved buffer (⌘S to save it elsewhere)",
+                      systemImage: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
 
         case .none:
             EmptyView()

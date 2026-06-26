@@ -78,9 +78,8 @@ enum HTMLRenderer {
             var t = e.target;
             if (t && t.classList && t.classList.contains('mdtask') &&
                 window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mdtask) {
-              var boxes = Array.prototype.slice.call(document.querySelectorAll('input.mdtask'));
-              var idx = boxes.indexOf(t);
-              if (idx >= 0) window.webkit.messageHandlers.mdtask.postMessage(idx);
+              var line = parseInt(t.getAttribute('data-line'), 10);
+              if (!isNaN(line) && line > 0) window.webkit.messageHandlers.mdtask.postMessage(line);
             }
           });
           // Outline navigation: scroll to the heading whose text matches (first match wins).
@@ -154,6 +153,18 @@ enum HTMLRenderer {
           }
           if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', __tgSetup);
           else __tgSetup();
+          // A click in the reader = "I want to edit here" → the app flips to Source. Links, checkboxes,
+          // the floating button, and an active text selection (drag-to-copy) are left to do their own
+          // thing. Only wired when hosted in the app; exported standalone HTML ignores it.
+          document.addEventListener('click', function (e) {
+            if (!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mdedit)) return;
+            if (e.target.closest && e.target.closest('a, input, button, label')) return;
+            var sel = window.getSelection();
+            if (sel && sel.toString().length > 0) return;
+            var el = e.target.closest('[data-line]');                        // open Source at the clicked block
+            var line = el ? (parseInt(el.getAttribute('data-line'), 10) || 0) : 0;
+            window.webkit.messageHandlers.mdedit.postMessage(line);
+          });
           window.addEventListener('load', __render);
         </script>
         </head>
@@ -166,14 +177,21 @@ enum HTMLRenderer {
 
     // MARK: - AST -> HTML
 
+    /// ` data-line="N"` for a block's source line (1-indexed) — lets a click in the preview flip to
+    /// Source at the same place, and anchors interactive checkboxes. Empty when the range is unknown.
+    private static func dataLine(_ markup: Markup) -> String {
+        guard let line = markup.range?.lowerBound.line else { return "" }
+        return " data-line=\"\(line)\""
+    }
+
     private static func html(for markup: Markup) -> String {
         switch markup {
         case let node as Document:
             return children(node)
         case let node as Heading:
-            return "<h\(node.level)>\(children(node))</h\(node.level)>\n"
+            return "<h\(node.level)\(dataLine(node))>\(children(node))</h\(node.level)>\n"
         case let node as Paragraph:
-            return "<p>\(children(node))</p>\n"
+            return "<p\(dataLine(node))>\(children(node))</p>\n"
         case let node as Text:
             return escape(node.string)
         case let node as Strong:
@@ -188,12 +206,12 @@ enum HTMLRenderer {
             // Mermaid fences become a <pre class="mermaid"> the JS renders into a diagram; everything
             // else is <pre><code class="language-…"> ready for highlight.js.
             if node.language?.lowercased() == "mermaid" {
-                return "<pre class=\"mermaid\">\(escape(node.code))</pre>\n"
+                return "<pre class=\"mermaid\"\(dataLine(node))>\(escape(node.code))</pre>\n"
             }
             let lang = node.language.map { " class=\"language-\(escape($0))\"" } ?? ""
-            return "<pre><code\(lang)>\(escape(node.code))</code></pre>\n"
+            return "<pre\(dataLine(node))><code\(lang)>\(escape(node.code))</code></pre>\n"
         case let node as Markdown.Table:
-            return "<table>\(children(node))</table>\n"
+            return "<table\(dataLine(node))>\(children(node))</table>\n"
         case let node as Markdown.Table.Head:
             let cells = node.children.map { "<th>\(children($0))</th>" }.joined()
             return "<thead><tr>\(cells)</tr></thead>\n"
@@ -205,23 +223,25 @@ enum HTMLRenderer {
         case let node as Markdown.Table.Cell:
             return children(node)
         case let node as Link:
-            return "<a href=\"\(escape(node.destination ?? ""))\">\(children(node))</a>"
+            return "<a href=\"\(safeURL(node.destination ?? ""))\">\(children(node))</a>"
         case let node as Image:
-            return "<img src=\"\(escape(node.source ?? ""))\" alt=\"\(escape(node.plainText))\">"
+            return "<img src=\"\(safeURL(node.source ?? ""))\" alt=\"\(escape(node.plainText))\">"
         case let node as UnorderedList:
             return "<ul>\n\(children(node))</ul>\n"
         case let node as OrderedList:
             return "<ol>\n\(children(node))</ol>\n"
         case let node as ListItem:
-            // `mdtask` checkboxes are interactive in the live preview (a change posts the task index to
-            // the app, which toggles it in the file). Export still produces a static checkbox.
+            // `mdtask` checkboxes are interactive in the live preview: a change posts the checkbox's
+            // SOURCE line (`data-line`) to the app, which toggles `[ ]`/`[x]` on that exact line — robust
+            // against any parser disagreement about task membership. Export still produces a static box.
             let box: String
+            let line = node.range?.lowerBound.line ?? 0
             switch node.checkbox {
-            case .checked: box = "<input type=\"checkbox\" class=\"mdtask\" checked> "
-            case .unchecked: box = "<input type=\"checkbox\" class=\"mdtask\"> "
+            case .checked: box = "<input type=\"checkbox\" class=\"mdtask\" data-line=\"\(line)\" checked> "
+            case .unchecked: box = "<input type=\"checkbox\" class=\"mdtask\" data-line=\"\(line)\"> "
             case nil: box = ""
             }
-            return "<li>\(box)\(children(node))</li>\n"
+            return "<li\(dataLine(node))>\(box)\(children(node))</li>\n"
         case let node as BlockQuote:
             // GFM callout `> [!NOTE]` → styled admonition; otherwise a plain blockquote.
             if let kind = calloutKind(node) {
@@ -342,6 +362,19 @@ enum HTMLRenderer {
             }
         }
         return out
+    }
+
+    /// Escape a link/image URL, neutralizing script-bearing schemes (`javascript:`, `vbscript:`,
+    /// `data:text/html`) so `[x](javascript:…)` can't execute in the preview/export. `data:image/…`
+    /// and ordinary/relative/mailto/anchor URLs pass through (escaped).
+    private static func safeURL(_ raw: String) -> String {
+        let probe = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines).joined()   // defeat "java\nscript:" splitting
+        if probe.hasPrefix("javascript:") || probe.hasPrefix("vbscript:") || probe.hasPrefix("data:text/html") {
+            return "#"
+        }
+        return escape(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     // MARK: - Theme CSS (matches the editor's iA aesthetic)

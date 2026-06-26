@@ -18,17 +18,24 @@ struct PreviewWebView: NSViewRepresentable {
     let title: String
     let dark: Bool
     var columnChars: Int = 72
+    /// Stable document identity (full file path) — drives switch detection independently of `title`,
+    /// so two files sharing a basename (e.g. two README.md) still register as a switch.
+    var docID: String = ""
     var controller: PreviewController? = nil
     var onToggleTask: ((Int) -> Void)? = nil
+    /// A click in the rendered reader → "edit here" (the app flips to Source at that source line).
+    var onRequestEdit: ((Int) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
         context.coordinator.onToggleTask = onToggleTask
+        context.coordinator.onRequestEdit = onRequestEdit
         let config = WKWebViewConfiguration()
         // Weak proxy so the user-content controller doesn't retain the coordinator in a cycle.
         config.userContentController.add(WeakMessageHandler(context.coordinator), name: "mdtask")
         config.userContentController.add(WeakMessageHandler(context.coordinator), name: "mdcopy")
+        config.userContentController.add(WeakMessageHandler(context.coordinator), name: "mdedit")
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
         if #available(macOS 12.0, *) { web.underPageBackgroundColor = dark ? .black : .white }
@@ -36,46 +43,48 @@ struct PreviewWebView: NSViewRepresentable {
         controller?.scrollToHeading = { [weak coordinator = context.coordinator] title in
             coordinator?.scrollToHeading(title)
         }
-        context.coordinator.reload(markdown: markdown, title: title, dark: dark, columnChars: columnChars)
+        context.coordinator.reload(markdown: markdown, title: title, dark: dark, columnChars: columnChars, docID: docID)
         return web
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.onToggleTask = onToggleTask
-        context.coordinator.apply(markdown: markdown, title: title, dark: dark, columnChars: columnChars)
+        context.coordinator.onRequestEdit = onRequestEdit
+        context.coordinator.apply(markdown: markdown, title: title, dark: dark, columnChars: columnChars, docID: docID)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var web: WKWebView?
         var onToggleTask: ((Int) -> Void)?
+        var onRequestEdit: ((Int) -> Void)?
         private var lastDark: Bool?
         private var lastColumnChars: Int?
         private var lastMarkdown = ""
-        private var lastTitle = ""
+        private var lastDocID = ""
         private var ready = false
         private var pending: String?
         private var debounce: DispatchWorkItem?
 
-        func reload(markdown: String, title: String, dark: Bool, columnChars: Int) {
+        func reload(markdown: String, title: String, dark: Bool, columnChars: Int, docID: String) {
             debounce?.cancel(); debounce = nil   // a stale body swap must not run against the new page
             pending = nil
             lastDark = dark
             lastColumnChars = columnChars
             lastMarkdown = markdown
-            lastTitle = title
+            lastDocID = docID
             ready = false
             web?.loadHTMLString(HTMLRenderer.richHTML(from: markdown, title: title, dark: dark, columnChars: columnChars), baseURL: nil)
         }
 
-        func apply(markdown: String, title: String, dark: Bool, columnChars: Int) {
+        func apply(markdown: String, title: String, dark: Bool, columnChars: Int, docID: String) {
             // Theme or column-width change → full reload (both live in the page CSS).
             if dark != lastDark || columnChars != lastColumnChars {
-                reload(markdown: markdown, title: title, dark: dark, columnChars: columnChars); return
+                reload(markdown: markdown, title: title, dark: dark, columnChars: columnChars, docID: docID); return
             }
             guard markdown != lastMarkdown else { return }
-            let switchedDoc = title != lastTitle   // a different file, not an incremental edit
+            let switchedDoc = docID != lastDocID   // a different file (by path), not an incremental edit
             lastMarkdown = markdown
-            lastTitle = title
+            lastDocID = docID
             debounce?.cancel()
             // A document switch should land in lockstep with the sidebar and editor (which reset
             // synchronously) — swap the body NOW and jump to the top. Only incremental typing is
@@ -110,6 +119,11 @@ struct PreviewWebView: NSViewRepresentable {
                     let pb = NSPasteboard.general
                     pb.clearContents()
                     pb.setString(text, forType: .string)
+                }
+            case "mdedit":
+                // A click in the reader → flip to Source at the clicked block's source line (0 = unknown).
+                if let line = (message.body as? Int) ?? (message.body as? Double).map(Int.init) {
+                    onRequestEdit?(line)
                 }
             default:
                 break
