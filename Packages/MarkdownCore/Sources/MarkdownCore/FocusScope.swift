@@ -54,7 +54,7 @@ public enum FocusRange {
         var result = para
         tokenizer.enumerateTokens(in: substring.startIndex..<substring.endIndex) { range, _ in
             let local = NSRange(range, in: substring)
-            if localCaret >= local.location && localCaret <= local.location + local.length {
+            if localCaret >= local.location && localCaret < local.location + local.length {
                 result = NSRange(location: para.location + local.location, length: local.length)
                 return false
             }

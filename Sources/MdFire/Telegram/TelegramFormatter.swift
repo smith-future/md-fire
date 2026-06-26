@@ -20,11 +20,15 @@ enum TelegramFormatter {
             switch node.role {
             case .heading:
                 // Replace the "## " marker run with "**" and append "**" after the title.
+                // Skip both edits when there's no inline content (e.g. "## " / "##"): the prefix
+                // length is 0, so emitting only the closing "**" would leave it unbalanced.
                 let prefix = NSRange(location: node.nodeRange.location,
                                      length: node.contentRange.location - node.nodeRange.location)
                 let suffix = NSRange(location: NSMaxRange(node.contentRange), length: 0)
-                if valid(prefix), prefix.length > 0 { edits.append((prefix, "**")) }
-                if valid(suffix) { edits.append((suffix, "**")) }
+                if prefix.length > 0, valid(prefix), valid(suffix) {
+                    edits.append((prefix, "**"))
+                    edits.append((suffix, "**"))
+                }
             case .emphasis:
                 // Single-delimiter italic -> Telegram's double-underscore italic.
                 for delimiter in node.markerRanges where valid(delimiter) {

@@ -292,7 +292,7 @@ public final class TreeSitterParser {
         pattern: "\\[\\[([^\\[\\]\\n]+)\\]\\]", options: [])
     private func appendWikiLinks(nsSource: NSString, into out: inout [SyntaxNode]) {
         let codeRanges = out.compactMap { node -> NSRange? in
-            switch node.role { case .codeSpan, .codeBlock: return node.nodeRange; default: return nil }
+            switch node.role { case .codeSpan, .codeBlock, .frontmatter, .math: return node.nodeRange; default: return nil }
         }
         let full = NSRange(location: 0, length: nsSource.length)
         for m in Self.wikiRegex.matches(in: nsSource as String, range: full) {

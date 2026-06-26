@@ -29,6 +29,10 @@ final class WorkspaceIndex {
     @ObservationIgnored private var root: URL?
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var generation = 0
+    /// Per-file sequence stamp: bumped on every touch (reindex OR delete) of a key. A detached reindex
+    /// captures its stamp and only commits if it's still the newest — so a delete/rename or a later edit
+    /// can't be overwritten by an older in-flight read (which would resurrect a deleted file as a ghost).
+    @ObservationIgnored private var fileSeq: [URL: Int] = [:]
     private static let exts: Set<String> = ["md", "markdown", "mdown", "txt"]
 
     // MARK: - Lifecycle
@@ -59,6 +63,7 @@ final class WorkspaceIndex {
             } else {
                 if entries[key] != nil { structureChanged = true }   // a file was removed
                 entries[key] = nil
+                fileSeq[key] = (fileSeq[key] ?? 0) + 1   // invalidate any in-flight reindex for this path
             }
         }
         if structureChanged { onStructureChange?() }
@@ -87,11 +92,17 @@ final class WorkspaceIndex {
     private func reindexFile(_ url: URL) {
         let key = Self.key(url)
         let gen = generation
+        let seq = (fileSeq[key] ?? 0) + 1
+        fileSeq[key] = seq
         Task.detached(priority: .utility) {
             let entry = Self.makeEntry(url)
             await MainActor.run { [weak self] in
-                // Drop a per-file reindex that belongs to a superseded workspace (setRoot bumped gen).
-                guard let self, gen == self.generation else { return }
+                // Drop a reindex superseded by a newer workspace (gen) or a newer touch of this file (seq).
+                guard let self, gen == self.generation, self.fileSeq[key] == seq else { return }
+                // Belt-and-suspenders: never resurrect a file that no longer exists on disk.
+                guard entry != nil, FileManager.default.fileExists(atPath: url.path) else {
+                    self.entries[key] = nil; return
+                }
                 self.entries[key] = entry
             }
         }

@@ -23,6 +23,7 @@ struct CommandPaletteView: View {
 
     @State private var query = ""
     @State private var selection = 0
+    @State private var lastKeyNav = Date.distantPast
     @FocusState private var focused: Bool
 
     private struct Item: Identifiable {
@@ -111,11 +112,12 @@ struct CommandPaletteView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { if $0 { selection = idx } }
+        .onHover { hovering in if hovering, Date().timeIntervalSince(lastKeyNav) > 0.25 { selection = idx } }
     }
 
     private func move(_ delta: Int, total: Int) {
         guard total > 0 else { return }
+        lastKeyNav = Date()
         selection = min(max(0, selection + delta), total - 1)
     }
 
